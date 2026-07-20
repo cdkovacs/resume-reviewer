@@ -1,5 +1,11 @@
 # Build the wheel + sdist for a released version and attach them to a GitHub
-# Release. A `v*` semver tag is the trigger. The tag is normally minted by
+# Release. A `v*` semver tag is the trigger.
+#
+# Immutability: the repo has immutable releases enabled (locks the tag and
+# signs asset attestations when the release publishes) AND a tag ruleset
+# ("immutable-version-tags") that blocks moving/deleting any v* tag from the
+# moment it is pushed — so tags are immutable even before/without a release.
+# The final step verifies the published release actually came out immutable. The tag is normally minted by
 # mint-release.yml, which also invokes this workflow directly via
 # `workflow_call` (a tag pushed with the default GITHUB_TOKEN does NOT fire
 # `on: push` workflows, so the mint job calls us rather than relying on the
@@ -73,3 +79,16 @@ jobs:
             --title "${REF_NAME}" \
             --generate-notes \
             --verify-tag
+
+      - name: Verify the release and its tag are immutable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          immutable="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${REF_NAME}" --jq '.immutable // false')"
+          if [ "${immutable}" != "true" ]; then
+            echo "::error::release ${REF_NAME} was created but is NOT immutable — re-enable the setting with: gh api -X PUT repos/${GITHUB_REPOSITORY}/immutable-releases"
+            exit 1
+          fi
+          echo "release ${REF_NAME} is immutable (tag locked, assets attested)"

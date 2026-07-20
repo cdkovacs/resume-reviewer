@@ -46,6 +46,26 @@ resume-reviewer .\resumes --output evaluations.xlsx
 Re-run step 2 any time to pick up the newest revision. To work from a clone
 instead, use `uv sync` and `uv run resume-reviewer ...` as described below.
 
+### Install from a wheel
+
+Every release has the built wheel attached as an asset (immutable, with a
+signed attestation). Useful when you want a pinned version, or on machines
+without git/SSH access to the repo:
+
+```sh
+# Download the wheel from the latest release (or pass a tag instead of omitting it)
+gh release download --repo ckovacs_boxboat/screener --pattern '*.whl' --dir dist
+
+# Install it as a tool (or: uv pip install ./dist/*.whl into an active venv)
+uv tool install ./dist/resume_reviewer-*.whl
+
+# Optional: verify the asset came from an immutable release
+gh release verify-asset --repo ckovacs_boxboat/screener <tag> ./dist/resume_reviewer-*.whl
+```
+
+Alternatively download the `.whl` from the Releases page in a browser and run
+`uv tool install ./resume_reviewer-<version>-py3-none-any.whl`.
+
 ## What it does
 
 For each resume (`.pdf`, `.docx`, `.txt`, `.md`) in the input directory, Claude

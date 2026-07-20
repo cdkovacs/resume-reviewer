@@ -9,6 +9,10 @@
 # Recursion guard: the bump commit and tag are pushed with the default
 # GITHUB_TOKEN, which does not fire `on: push` workflows — so this run does
 # not retrigger itself; release.yml is invoked directly via workflow_call.
+#
+# Tag immutability: the repo's "immutable-version-tags" ruleset blocks
+# moving/deleting v* tags at push time (creation stays open so this job can
+# tag), and immutable releases lock the tag + attest assets on publish.
 name: mint-release
 
 on:
