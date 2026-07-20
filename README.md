@@ -189,8 +189,12 @@ with blank Geo/Line/Band. The workflow is two-phase:
    you're offered a fast bootstrap: populate it with candidate names only —
    extracted with the cheap screening model — skipping skill evaluations
    entirely. The staffing team then fills in each person's Geo, Line, and Band
-   using the **dropdowns** on those columns (and Currency), sourced from the
-   rates table via a hidden Lookups sheet.
+   using the **cascading dropdowns** on those columns: pick a Geo and the
+   Line list filters to that geo's lines; pick a Line and the Band list
+   filters to the bands available for that Geo+Line (Currency is a flat
+   list). Sourced from the rates table via a hidden Lookups sheet. Note an
+   Excel limitation: changing a parent (e.g. Geo) does not clear an
+   already-selected child value — reselect Line/Band after changing Geo.
 2. The rates table (`--rates`, defaulting to `rates.xlsx` then
    `~/staffing/rates.xlsx`; columns Country, Line, Band, Rate, Currency) is
    copied into a **Rates** tab of the workbook, and the Rate/Currency columns

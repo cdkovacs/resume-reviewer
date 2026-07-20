@@ -241,32 +241,63 @@ def load_rates(path: Path) -> RatesTable:
 
 
 def apply_staff_dropdowns(wb, ws, rates: RatesTable) -> None:
-    """Data-validation dropdowns for the fill-in fields (Geo, Line, Band,
-    Currency), sourced from a hidden Lookups sheet — inline list formulas
-    would exceed Excel's 255-char limit with long line names."""
+    """Cascading data-validation dropdowns for the fill-in fields.
+
+    Geo and Currency are flat lists. Line is filtered by the chosen Geo, and
+    Band by the chosen Geo+Line, using OFFSET/MATCH/COUNTIF over sorted helper
+    tables on a hidden Lookups sheet (the INDIRECT/named-range trick can't
+    work here: line names contain spaces, hyphens, and '&', which are invalid
+    in defined names). Helper rows are sorted so each parent's children are
+    contiguous — required for the OFFSET window to be correct."""
     from openpyxl.worksheet.datavalidation import DataValidation
 
     if "Lookups" in wb.sheetnames:
         del wb["Lookups"]
     lk = wb.create_sheet("Lookups")
     lk.sheet_state = "hidden"
-    columns = [("A", "Geo", rates.geos), ("B", "Line", rates.lines),
-               ("C", "Band", rates.bands), ("D", "Currency", rates.currencies)]
-    for col, header, values in columns:
-        lk[f"{col}1"] = header
-        for i, value in enumerate(values, start=2):
-            lk[f"{col}{i}"] = value
+
+    # Flat lists: Geo (A), Currency (B)
+    lk["A1"] = "Geo"
+    for i, value in enumerate(rates.geos, start=2):
+        lk[f"A{i}"] = value
+    lk["B1"] = "Currency"
+    for i, value in enumerate(rates.currencies, start=2):
+        lk[f"B{i}"] = value
+
+    # Cascade helpers: distinct (Geo, Line) pairs sorted by Geo (D:E), and
+    # distinct (Geo|Line key, Band) sorted by key (G:H).
+    pair_map: dict = {}
+    triple_map: dict = {}
+    for country, line, band, _rate, _currency in rates.rows:
+        pair_map.setdefault((_norm(country), _norm(line)), (country, line))
+        triple_map.setdefault((_norm(country), _norm(line), _norm(band)), (country, line, band))
+    pairs = [pair_map[k] for k in sorted(pair_map)]
+    triples = [triple_map[k] for k in sorted(triple_map)]
+
+    lk["D1"], lk["E1"] = "PairGeo", "PairLine"
+    for i, (country, line) in enumerate(pairs, start=2):
+        lk[f"D{i}"], lk[f"E{i}"] = country, line
+    lk["G1"], lk["H1"] = "GeoLineKey", "Band"
+    for i, (country, line, band) in enumerate(triples, start=2):
+        lk[f"G{i}"], lk[f"H{i}"] = f"{country}|{line}", band
 
     ws.data_validations.dataValidation = []  # rebuilt fresh on every sync
     last_row = max(ws.max_row + 200, 1000)
-    for target_col, (lk_col, _, values) in zip("BCDF", columns):
-        if not values:
-            continue
-        dv = DataValidation(
-            type="list",
-            formula1=f"Lookups!${lk_col}$2:${lk_col}${len(values) + 1}",
-            allow_blank=True,
-        )
+    np, nt = len(pairs) + 1, len(triples) + 1
+    validations = [
+        # Geo: flat list
+        ("B", f"Lookups!$A$2:$A${len(rates.geos) + 1}"),
+        # Line: rows of the pair table whose Geo matches $B2
+        ("C", f"OFFSET(Lookups!$E$1,MATCH($B2,Lookups!$D$2:$D${np},0),0,"
+              f"COUNTIF(Lookups!$D$2:$D${np},$B2),1)"),
+        # Band: rows of the triple table whose Geo|Line key matches $B2|$C2
+        ("D", f'OFFSET(Lookups!$H$1,MATCH($B2&"|"&$C2,Lookups!$G$2:$G${nt},0),0,'
+              f'COUNTIF(Lookups!$G$2:$G${nt},$B2&"|"&$C2),1)'),
+        # Currency: flat list
+        ("F", f"Lookups!$B$2:$B${len(rates.currencies) + 1}"),
+    ]
+    for target_col, formula in validations:
+        dv = DataValidation(type="list", formula1=formula, allow_blank=True)
         ws.add_data_validation(dv)
         dv.add(f"{target_col}2:{target_col}{last_row}")
 
