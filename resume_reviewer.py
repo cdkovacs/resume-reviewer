@@ -34,6 +34,8 @@ import anthropic
 from pydantic import BaseModel, Field, ValidationError
 
 RESUME_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
+DEFAULT_SKILLS_FILE = "skills.txt"
+DEFAULT_PROJECT_FILE = "project.md"
 DEFAULT_MODEL = "claude-opus-4-8"
 DEFAULT_SCREEN_MODEL = "claude-haiku-4-5"
 # The /ica root, NOT /ica/v1 — the SDK appends /v1/messages itself.
@@ -388,9 +390,15 @@ def main() -> int:
     parser.add_argument("--prompt", help="Additional evaluation instructions")
     parser.add_argument("--prompt-file", help="File containing additional evaluation instructions")
     parser.add_argument("--project", help="Project description text")
-    parser.add_argument("--project-file", help="File containing the project description")
+    parser.add_argument(
+        "--project-file",
+        help=f"File containing the project description (default: {DEFAULT_PROJECT_FILE} if present)",
+    )
     parser.add_argument("--skills", help="Comma-separated list of skills to evaluate")
-    parser.add_argument("--skills-file", help="File with one skill per line")
+    parser.add_argument(
+        "--skills-file",
+        help=f"File with one skill per line (default: {DEFAULT_SKILLS_FILE} if present)",
+    )
     parser.add_argument("--output", default="evaluations.xlsx", help="Output .xlsx path (default: evaluations.xlsx)")
     parser.add_argument(
         "--provider",
@@ -428,13 +436,33 @@ def main() -> int:
     if not resumes_dir.is_dir():
         sys.exit(f"error: {resumes_dir} is not a directory")
 
-    project = read_arg_or_file(args.project, args.project_file, "project", required=True)
+    project = read_arg_or_file(args.project, args.project_file, "project", required=False)
+    if not project:
+        if Path(DEFAULT_PROJECT_FILE).is_file():
+            project = Path(DEFAULT_PROJECT_FILE).read_text(encoding="utf-8")
+        else:
+            sys.exit(
+                f"error: provide --project/--project-file, or create {DEFAULT_PROJECT_FILE} "
+                "in the current directory"
+            )
 
-    skills_text = read_arg_or_file(args.skills, args.skills_file, "skills", required=True)
-    if args.skills_file:
-        skills = [line.strip() for line in skills_text.splitlines() if line.strip()]
+    skills_text = read_arg_or_file(args.skills, args.skills_file, "skills", required=False)
+    if skills_text:
+        if args.skills_file:
+            skills = [line.strip() for line in skills_text.splitlines() if line.strip()]
+        else:
+            skills = [s.strip() for s in skills_text.split(",") if s.strip()]
+    elif Path(DEFAULT_SKILLS_FILE).is_file():
+        skills = [
+            line.strip()
+            for line in Path(DEFAULT_SKILLS_FILE).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
     else:
-        skills = [s.strip() for s in skills_text.split(",") if s.strip()]
+        sys.exit(
+            f"error: provide --skills/--skills-file, or create {DEFAULT_SKILLS_FILE} "
+            "in the current directory"
+        )
     if not skills:
         sys.exit("error: no skills provided")
 

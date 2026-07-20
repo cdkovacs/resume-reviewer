@@ -1,8 +1,32 @@
 # Resume Reviewer
 
+[![Latest release](https://img.shields.io/github/v/release/ckovacs_boxboat/screener)](https://github.com/ckovacs_boxboat/screener/releases/latest)
+
 AI workflow that evaluates a directory of resumes against a skill list and a
 project description using the Claude API, and exports the results as an Excel
 spreadsheet.
+
+## Quickstart
+
+```sh
+# 1. Install uv (skip if you have it)
+curl -LsSf https://astral.sh/uv/install.sh | sh        # macOS/Linux
+# or: brew install uv
+
+# 2. Install the latest revision of resume-reviewer as a tool
+uv tool install --force git+ssh://git@github.com/ckovacs_boxboat/screener.git
+
+# 3. Configure the backend (ICA is the default)
+export ICA_ANTHROPIC_API_KEY=<your-key>
+
+# 4. Put your inputs in the current directory and run
+#      skills.txt   one skill per line          (default skills list)
+#      project.md   the project description     (default project description)
+resume-reviewer ./resumes --output evaluations.xlsx
+```
+
+Re-run step 2 any time to pick up the newest revision. To work from a clone
+instead, use `uv sync` and `uv run resume-reviewer ...` as described below.
 
 ## What it does
 
@@ -63,8 +87,8 @@ uv run resume-reviewer ./resumes \
 | Flag | Description |
 |---|---|
 | `resumes_dir` | Directory containing resumes (`.pdf`, `.docx`, `.txt`, `.md`) |
-| `--skills` / `--skills-file` | Comma-separated list, or a file with one skill per line (required) |
-| `--project` / `--project-file` | Project description text or file (required) |
+| `--skills` / `--skills-file` | Comma-separated list, or a file with one skill per line (default: `skills.txt` in the current directory) |
+| `--project` / `--project-file` | Project description text or file (default: `project.md` in the current directory) |
 | `--prompt` / `--prompt-file` | Additional evaluation instructions (optional) |
 | `--output` | Output `.xlsx` path (default: `evaluations.xlsx`) |
 | `--provider` | `ica` (default) or `anthropic` |
