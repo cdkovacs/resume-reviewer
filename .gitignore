@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Generated output
+*.xlsx
+
+# OS
+.DS_Store

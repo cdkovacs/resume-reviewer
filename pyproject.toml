@@ -1,0 +1,22 @@
+[project]
+name = "resume-reviewer"
+version = "0.1.0"
+description = "Evaluate a directory of resumes against skills and a project description with Claude (ICA by default); export results to Excel"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.117.0",
+    "openpyxl>=3.1.5",
+    "pydantic>=2.13.4",
+    "python-docx>=1.2.0",
+]
+
+[project.scripts]
+resume-reviewer = "resume_reviewer:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["resume_reviewer.py"]
