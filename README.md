@@ -3,7 +3,7 @@
 [![Latest release](https://img.shields.io/github/v/release/cdkovacs/resume-reviewer)](https://github.com/cdkovacs/resume-reviewer/releases/latest)
 
 AI workflow that evaluates a directory of resumes against a skill list and a
-project description using the Claude API, and exports the results as an Excel
+project description using the ICA/Claude API, and exports the results as an Excel
 spreadsheet.
 
 ## Quickstart
@@ -70,7 +70,7 @@ Alternatively download the `.whl` from the Releases page in a browser and run
 
 ## What it does
 
-For each resume (`.pdf`, `.docx`, `.txt`, `.md`) in the input directory, Claude
+For each resume (`.pdf`, `.docx`, `.txt`, `.md`) in the input directory, ICA/Claude
 produces a structured evaluation: candidate name, an overall fit score (1-5), a
 hire recommendation, per-skill scores with supporting evidence, strengths, and
 gaps. Results land in an `.xlsx` workbook:
