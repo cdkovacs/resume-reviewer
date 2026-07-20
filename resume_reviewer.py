@@ -194,6 +194,7 @@ class StaffInfo:
 @dataclass
 class RatesTable:
     rates: dict  # (geo, line, band) -> (rate, currency), keys normalized
+    rows: List[tuple]  # original (country, line, band, rate, currency) rows, in file order
     geos: List[object]
     lines: List[object]
     bands: List[object]
@@ -212,6 +213,7 @@ def load_rates(path: Path) -> RatesTable:
     ws = load_workbook(path, data_only=True).active
     assert ws is not None
     rates: dict = {}
+    rows: List[tuple] = []
     seen: dict = {"geo": {}, "line": {}, "band": {}, "currency": {}}
     for row in ws.iter_rows(min_row=2, values_only=True):
         country, line, band, rate, currency = (list(row) + [None] * 5)[:5]
@@ -222,6 +224,7 @@ def load_rates(path: Path) -> RatesTable:
         except (TypeError, ValueError):
             continue
         rates[(_norm(country), _norm(line), _norm(band))] = (rate_value, str(currency or ""))
+        rows.append((country, line, band, rate, currency))
         seen["geo"].setdefault(_norm(country), country)
         seen["line"].setdefault(_norm(line), line)
         seen["band"].setdefault(_norm(band), band)
@@ -229,6 +232,7 @@ def load_rates(path: Path) -> RatesTable:
             seen["currency"].setdefault(_norm(currency), currency)
     return RatesTable(
         rates=rates,
+        rows=rows,
         geos=list(seen["geo"].values()),
         lines=list(seen["line"].values()),
         bands=list(seen["band"].values()),
@@ -267,6 +271,29 @@ def apply_staff_dropdowns(wb, ws, rates: RatesTable) -> None:
         dv.add(f"{target_col}2:{target_col}{last_row}")
 
 
+def write_rates_sheet(wb, rates: RatesTable) -> None:
+    """Copy the rates table into a 'Rates' tab so the workbook is
+    self-contained. Column D holds a hidden Geo|Line|Band key that the
+    Staff Rates sheet's VLOOKUP formulas resolve against."""
+    from openpyxl.styles import Font, PatternFill
+
+    if "Rates" in wb.sheetnames:
+        del wb["Rates"]
+    rs = wb.create_sheet("Rates")
+    rs.append(["Country", "Line", "Band", "Key", "Rate", "Currency"])
+    for cell in rs[1]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="D9E1F2")
+    rs.freeze_panes = "A2"
+    for i, (country, line, band, rate, currency) in enumerate(rates.rows, start=2):
+        # The key is an Excel formula (not a Python string) so its text
+        # coercion of numeric bands matches the lookup side exactly.
+        rs.append([country, line, band, f'=A{i}&"|"&B{i}&"|"&C{i}', rate, currency])
+    rs.column_dimensions["D"].hidden = True
+    for col, width in zip("ABCEF", [10, 42, 8, 10, 10]):
+        rs.column_dimensions[col].width = width
+
+
 def sync_staff_rates(
     staff_path: Path,
     candidate_names: List[str],
@@ -303,39 +330,63 @@ def sync_staff_rates(
         for col, width in zip("ABCDEF", [28, 10, 30, 8, 10, 10]):
             ws.column_dimensions[col].width = width
 
+    # In-workbook lookup: Rate/Currency cells become VLOOKUP formulas against
+    # the Rates tab, so they populate live in Excel as soon as Geo/Line/Band
+    # are chosen — no re-run needed.
+    lookup_range = f"Rates!$D$2:$F${len(rates.rows) + 1}" if rates is not None else None
+
+    def set_rate_formulas(row_idx: int) -> None:
+        key = f'B{row_idx}&"|"&C{row_idx}&"|"&D{row_idx}'
+        blank_guard = f'OR(B{row_idx}="",C{row_idx}="",D{row_idx}="")'
+        ws.cell(row=row_idx, column=5).value = (
+            f'=IF({blank_guard},"",IFERROR(VLOOKUP({key},{lookup_range},2,FALSE),"no match"))'
+        )
+        ws.cell(row=row_idx, column=6).value = (
+            f'=IF({blank_guard},"",IFERROR(VLOOKUP({key},{lookup_range},3,FALSE),""))'
+        )
+
     staff: dict = {}
     unmatched: List[str] = []
     for row in ws.iter_rows(min_row=2):
         name = row[0].value
         if not name or not str(name).strip():
             continue
+        raw_rate, raw_currency = row[4].value, row[5].value
         info = StaffInfo(
             name=str(name).strip(),
             geo=str(row[1].value or "").strip(),
             line=str(row[2].value or "").strip(),
             band=str(row[3].value or "").strip(),
-            rate=float(row[4].value) if row[4].value is not None else None,  # type: ignore[arg-type]
-            currency=str(row[5].value or "").strip(),
+            # Cells may now hold formulas; only literal values are read here.
+            rate=float(raw_rate) if isinstance(raw_rate, (int, float)) else None,
+            currency=raw_currency.strip()
+            if isinstance(raw_currency, str) and not raw_currency.startswith("=")
+            else "",
         )
-        # Fill in the rate whenever Geo/Line/Band are populated and we have a
-        # rates table (also refreshes stale rates after a rates-file update).
-        if rates is not None and info.geo and info.line and info.band:
-            hit = rates.rates.get((_norm(info.geo), _norm(info.line), _norm(info.band)))
-            if hit:
-                info.rate, info.currency = hit
-                row[4].value, row[5].value = info.rate, info.currency
-            else:
-                unmatched.append(f"{info.name} ({info.geo}/{info.line}/{info.band})")
+        if rates is not None:
+            # Python-side rate for team shapes comes straight from the rates
+            # table — independent of whether Excel has recalculated formulas.
+            if info.geo and info.line and info.band:
+                hit = rates.rates.get((_norm(info.geo), _norm(info.line), _norm(info.band)))
+                if hit:
+                    info.rate, info.currency = hit
+                else:
+                    info.rate, info.currency = None, ""
+                    unmatched.append(f"{info.name} ({info.geo}/{info.line}/{info.band})")
+            set_rate_formulas(row[0].row)
         staff[info.name.lower()] = info
 
     added = 0
     for name in candidate_names:
         if name.strip().lower() not in staff:
             ws.append([name, "", "", "", None, ""])
+            if rates is not None:
+                set_rate_formulas(ws.max_row)
             staff[name.strip().lower()] = StaffInfo(name=name)
             added += 1
 
     if rates is not None:
+        write_rates_sheet(wb, rates)
         apply_staff_dropdowns(wb, ws, rates)
     wb.save(staff_path)
     if added:

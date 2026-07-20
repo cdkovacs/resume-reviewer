@@ -191,10 +191,13 @@ with blank Geo/Line/Band. The workflow is two-phase:
    entirely. The staffing team then fills in each person's Geo, Line, and Band
    using the **dropdowns** on those columns (and Currency), sourced from the
    rates table via a hidden Lookups sheet.
-2. **Re-run**: rows with Geo/Line/Band populated get their cost Rate and
-   Currency looked up from the rates table (`--rates`, defaulting to
-   `rates.xlsx` then `~/staffing/rates.xlsx`; columns Country, Line, Band,
-   Rate, Currency). Unmatched combinations are reported.
+2. The rates table (`--rates`, defaulting to `rates.xlsx` then
+   `~/staffing/rates.xlsx`; columns Country, Line, Band, Rate, Currency) is
+   copied into a **Rates** tab of the workbook, and the Rate/Currency columns
+   are live `VLOOKUP` formulas against it — they populate in Excel the moment
+   Geo/Line/Band are chosen (or show `no match` for combinations not in the
+   table). Re-running the tool refreshes the Rates tab, reports unmatched
+   combinations, and uses the looked-up rates for team shapes.
 
 Once **every** evaluated candidate has a rate and `--team-size N` is given,
 the single Team tab is replaced by a **Team Shapes** tab with four teams of N,
