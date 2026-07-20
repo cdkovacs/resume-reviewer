@@ -8,10 +8,11 @@ spreadsheet.
 
 ## Quickstart
 
+**macOS / Linux:**
+
 ```sh
 # 1. Install uv (skip if you have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh        # macOS/Linux
-# or: brew install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh        # or: brew install uv
 
 # 2. Install the latest revision of resume-reviewer as a tool
 uv tool install --force git+ssh://git@github.com/ckovacs_boxboat/screener.git
@@ -23,6 +24,25 @@ export ICA_ANTHROPIC_API_KEY=<your-key>
 #      skills.txt   one skill per line          (default skills list)
 #      project.md   the project description     (default project description)
 resume-reviewer ./resumes --output evaluations.xlsx
+```
+
+**Windows (PowerShell):**
+
+```powershell
+# 1. Install uv (skip if you have it)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+# or: winget install --id=astral-sh.uv -e
+
+# 2. Install the latest revision of resume-reviewer as a tool
+uv tool install --force git+ssh://git@github.com/ckovacs_boxboat/screener.git
+
+# 3. Configure the backend (ICA is the default)
+$env:ICA_ANTHROPIC_API_KEY = "<your-key>"
+
+# 4. Put your inputs in the current directory and run
+#      skills.txt   one skill per line          (default skills list)
+#      project.md   the project description     (default project description)
+resume-reviewer .\resumes --output evaluations.xlsx
 ```
 
 Re-run step 2 any time to pick up the newest revision. To work from a clone
