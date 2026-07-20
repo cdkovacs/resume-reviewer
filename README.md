@@ -185,8 +185,12 @@ After each run, every evaluated candidate is synced into **`staff-rates.xlsx`**
 are skipped — their rows are never modified — and new candidates are appended
 with blank Geo/Line/Band. The workflow is two-phase:
 
-1. **First run** scaffolds `staff-rates.xlsx`. The staffing team fills in each
-   person's Geo (e.g. `US`), Line, and Band.
+1. **First run** scaffolds `staff-rates.xlsx`. If the file doesn't exist yet,
+   you're offered a fast bootstrap: populate it with candidate names only —
+   extracted with the cheap screening model — skipping skill evaluations
+   entirely. The staffing team then fills in each person's Geo, Line, and Band
+   using the **dropdowns** on those columns (and Currency), sourced from the
+   rates table via a hidden Lookups sheet.
 2. **Re-run**: rows with Geo/Line/Band populated get their cost Rate and
    Currency looked up from the rates table (`--rates`, defaulting to
    `rates.xlsx` then `~/staffing/rates.xlsx`; columns Country, Line, Band,

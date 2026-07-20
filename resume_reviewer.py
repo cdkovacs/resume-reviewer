@@ -131,6 +131,10 @@ class ScreenResult(BaseModel):
     summary: str = Field(description="1-2 sentence assessment of the candidate's fit")
 
 
+class CandidateName(BaseModel):
+    candidate_name: str = Field(description="The candidate's full name as it appears on the resume")
+
+
 @dataclass
 class Result:
     file: Path
@@ -187,18 +191,28 @@ class StaffInfo:
     currency: str = ""
 
 
+@dataclass
+class RatesTable:
+    rates: dict  # (geo, line, band) -> (rate, currency), keys normalized
+    geos: List[object]
+    lines: List[object]
+    bands: List[object]
+    currencies: List[object]
+
+
 def _norm(value) -> str:
     return str(value).strip().upper() if value is not None else ""
 
 
-def load_rates(path: Path) -> dict:
-    """Rates table: (geo, line, band) -> (rate, currency). Header row is
-    Country, Line, Band, Rate, Currency."""
+def load_rates(path: Path) -> RatesTable:
+    """Rates table with header row Country, Line, Band, Rate, Currency.
+    Distinct original values are kept (in file order) for dropdown lists."""
     from openpyxl import load_workbook
 
     ws = load_workbook(path, data_only=True).active
     assert ws is not None
-    rates = {}
+    rates: dict = {}
+    seen: dict = {"geo": {}, "line": {}, "band": {}, "currency": {}}
     for row in ws.iter_rows(min_row=2, values_only=True):
         country, line, band, rate, currency = (list(row) + [None] * 5)[:5]
         if country is None or line is None or band is None or rate is None:
@@ -208,13 +222,55 @@ def load_rates(path: Path) -> dict:
         except (TypeError, ValueError):
             continue
         rates[(_norm(country), _norm(line), _norm(band))] = (rate_value, str(currency or ""))
-    return rates
+        seen["geo"].setdefault(_norm(country), country)
+        seen["line"].setdefault(_norm(line), line)
+        seen["band"].setdefault(_norm(band), band)
+        if currency:
+            seen["currency"].setdefault(_norm(currency), currency)
+    return RatesTable(
+        rates=rates,
+        geos=list(seen["geo"].values()),
+        lines=list(seen["line"].values()),
+        bands=list(seen["band"].values()),
+        currencies=list(seen["currency"].values()),
+    )
+
+
+def apply_staff_dropdowns(wb, ws, rates: RatesTable) -> None:
+    """Data-validation dropdowns for the fill-in fields (Geo, Line, Band,
+    Currency), sourced from a hidden Lookups sheet — inline list formulas
+    would exceed Excel's 255-char limit with long line names."""
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    if "Lookups" in wb.sheetnames:
+        del wb["Lookups"]
+    lk = wb.create_sheet("Lookups")
+    lk.sheet_state = "hidden"
+    columns = [("A", "Geo", rates.geos), ("B", "Line", rates.lines),
+               ("C", "Band", rates.bands), ("D", "Currency", rates.currencies)]
+    for col, header, values in columns:
+        lk[f"{col}1"] = header
+        for i, value in enumerate(values, start=2):
+            lk[f"{col}{i}"] = value
+
+    ws.data_validations.dataValidation = []  # rebuilt fresh on every sync
+    last_row = max(ws.max_row + 200, 1000)
+    for target_col, (lk_col, _, values) in zip("BCDF", columns):
+        if not values:
+            continue
+        dv = DataValidation(
+            type="list",
+            formula1=f"Lookups!${lk_col}$2:${lk_col}${len(values) + 1}",
+            allow_blank=True,
+        )
+        ws.add_data_validation(dv)
+        dv.add(f"{target_col}2:{target_col}{last_row}")
 
 
 def sync_staff_rates(
     staff_path: Path,
     candidate_names: List[str],
-    rates: Optional[dict],
+    rates: Optional[RatesTable],
 ) -> dict:
     """Create/update staff-rates.xlsx and return {normalized name: StaffInfo}.
 
@@ -264,7 +320,7 @@ def sync_staff_rates(
         # Fill in the rate whenever Geo/Line/Band are populated and we have a
         # rates table (also refreshes stale rates after a rates-file update).
         if rates is not None and info.geo and info.line and info.band:
-            hit = rates.get((_norm(info.geo), _norm(info.line), _norm(info.band)))
+            hit = rates.rates.get((_norm(info.geo), _norm(info.line), _norm(info.band)))
             if hit:
                 info.rate, info.currency = hit
                 row[4].value, row[5].value = info.rate, info.currency
@@ -279,6 +335,8 @@ def sync_staff_rates(
             staff[name.strip().lower()] = StaffInfo(name=name)
             added += 1
 
+    if rates is not None:
+        apply_staff_dropdowns(wb, ws, rates)
     wb.save(staff_path)
     if added:
         print(f"staff-rates: added {added} new candidate(s) to {staff_path} — "
@@ -459,6 +517,36 @@ def screen_resume(
         tool_name="record_screen_result",
         max_tokens=2000,
     )
+
+
+def extract_name(client: anthropic.Anthropic, model: str, path: Path) -> str:
+    """Name-only extraction with a cheap model — used to bootstrap
+    staff-rates.xlsx without running full skill evaluations."""
+    result = call_structured(
+        client,
+        model,
+        "Extract the candidate's full name from the resume you are given.",
+        [resume_content_block(path), {"type": "text", "text": "Extract the candidate's name."}],
+        CandidateName,
+        tool_name="record_name",
+        max_tokens=500,
+    )
+    return result.candidate_name
+
+
+def find_rates_table(rates_arg: Optional[str]) -> Optional[RatesTable]:
+    """--rates path, else the first default candidate that exists."""
+    candidates = [rates_arg] if rates_arg else list(DEFAULT_RATES_CANDIDATES)
+    for cand in candidates:
+        p = Path(cand).expanduser()
+        if p.is_file():
+            table = load_rates(p)
+            print(f"Loaded {len(table.rates)} rate entries from {p}")
+            return table
+    if rates_arg:
+        sys.exit(f"error: rates file {rates_arg} not found")
+    print("note: no rates table found (looked for " + ", ".join(candidates) + ")")
+    return None
 
 
 def select_team(
@@ -934,12 +1022,44 @@ def main() -> int:
         sys.exit(f"error: no resumes ({', '.join(sorted(RESUME_EXTENSIONS))}) found in {resumes_dir}")
 
     model = resolve_model(args.provider, args.model)
+    client = make_client(args.provider, args.host)
+
+    # Bootstrap: if staff-rates.xlsx doesn't exist yet, offer to populate it
+    # with candidate names only (cheap model, no skill evaluations) so the
+    # staffing team can fill in Geo/Line/Band before the full run.
+    staff_path = Path(args.staff_rates) if args.staff_rates else None
+    if staff_path is not None and not staff_path.is_file() and sys.stdin.isatty():
+        answer = input(
+            f"{staff_path} does not exist. Populate it with candidate names only, "
+            "skipping skill evaluations? [y/N] "
+        ).strip().lower()
+        if answer in ("y", "yes"):
+            print(f"Extracting candidate names with {args.screen_model}...")
+            names: List[str] = []
+            with ThreadPoolExecutor(max_workers=max(1, args.workers)) as name_pool:
+                futures = {
+                    name_pool.submit(extract_name, client, args.screen_model, p): p
+                    for p in files
+                }
+                for future in as_completed(futures):
+                    path = futures[future]
+                    try:
+                        name = future.result()
+                        names.append(name)
+                        print(f"  {path.name}: {name}")
+                    except Exception as exc:
+                        print(f"  {path.name}: FAILED ({type(exc).__name__}: {exc})")
+            sync_staff_rates(staff_path, sorted(names), find_rates_table(args.rates))
+            print(
+                f"\nWrote {staff_path} with {len(names)} candidate(s). Fill in "
+                "Geo/Line/Band (dropdowns provided) and re-run for rates and evaluations."
+            )
+            return 0
+
     print(
         f"Evaluating {len(files)} resume(s) against {len(skills)} skill(s) "
         f"with {model} via {args.provider}..."
     )
-
-    client = make_client(args.provider, args.host)
     system_prompt = build_system_prompt(prompt, project, skills)
 
     lock = threading.Lock()
@@ -1010,26 +1130,9 @@ def main() -> int:
         if r.evaluation and r.stage == "full" and r.evaluation.skill_evaluations
     ]
     if args.staff_rates and evaluated_names:
-        rates = None
-        rates_path = None
-        rates_candidates = [args.rates] if args.rates else list(DEFAULT_RATES_CANDIDATES)
-        for cand in rates_candidates:
-            p = Path(cand).expanduser()
-            if p.is_file():
-                rates_path = p
-                break
-        if args.rates and rates_path is None:
-            sys.exit(f"error: rates file {args.rates} not found")
-        if rates_path is not None:
-            rates = load_rates(rates_path)
-            print(f"Loaded {len(rates)} rate entries from {rates_path}")
-        else:
-            print(
-                "note: no rates table found (looked for "
-                + ", ".join(rates_candidates)
-                + "); syncing staff rates without cost rates"
-            )
-        staff = sync_staff_rates(Path(args.staff_rates), evaluated_names, rates)
+        staff = sync_staff_rates(
+            Path(args.staff_rates), evaluated_names, find_rates_table(args.rates)
+        )
 
     # --- Team selection / team shapes --------------------------------------
     team = None
