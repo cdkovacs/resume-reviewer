@@ -477,6 +477,19 @@ def call_structured(
     raise RuntimeError(f"model output failed schema validation after retry: {last_err}")
 
 
+def resume_user_content(path: Path, instruction: str) -> list:
+    """Resume block plus instruction, with the file name as extra context —
+    file names often carry the candidate's name (e.g. Jane_Smith_Resume.pdf)."""
+    return [
+        resume_content_block(path),
+        {
+            "type": "text",
+            "text": f'The resume file is named "{path.name}" — use it as additional '
+            f"context for the candidate's name. {instruction}",
+        },
+    ]
+
+
 def evaluate_resume(
     client: anthropic.Anthropic,
     model: str,
@@ -487,7 +500,7 @@ def evaluate_resume(
         client,
         model,
         system_prompt,
-        [resume_content_block(path), {"type": "text", "text": "Evaluate this resume."}],
+        resume_user_content(path, "Evaluate this resume."),
         ResumeEvaluation,
         tool_name="record_evaluation",
         max_tokens=16000,
@@ -505,14 +518,11 @@ def screen_resume(
         client,
         model,
         system_prompt,
-        [
-            resume_content_block(path),
-            {
-                "type": "text",
-                "text": "Quickly screen this resume: give only the candidate name, "
-                "an overall fit score, a recommendation, and a 1-2 sentence summary.",
-            },
-        ],
+        resume_user_content(
+            path,
+            "Quickly screen this resume: give only the candidate name, "
+            "an overall fit score, a recommendation, and a 1-2 sentence summary.",
+        ),
         ScreenResult,
         tool_name="record_screen_result",
         max_tokens=2000,
@@ -526,7 +536,7 @@ def extract_name(client: anthropic.Anthropic, model: str, path: Path) -> str:
         client,
         model,
         "Extract the candidate's full name from the resume you are given.",
-        [resume_content_block(path), {"type": "text", "text": "Extract the candidate's name."}],
+        resume_user_content(path, "Extract the candidate's name."),
         CandidateName,
         tool_name="record_name",
         max_tokens=500,
