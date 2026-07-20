@@ -21,7 +21,7 @@ uv tool install --force git+https://github.com/cdkovacs/resume-reviewer.git
 export ICA_ANTHROPIC_API_KEY=<your-key>
 
 # 4. Put your inputs in the current directory and run
-#      skills.txt   one skill per line          (default skills list)
+#      skills.csv   skill[,weight] per line     (default skills list; weight defaults to 1.0)
 #      project.md   the project description     (default project description)
 resume-reviewer ./resumes --output evaluations.xlsx
 ```
@@ -40,7 +40,7 @@ uv tool install --force git+https://github.com/cdkovacs/resume-reviewer.git
 $env:ICA_ANTHROPIC_API_KEY = "<your-key>"
 
 # 4. Put your inputs in the current directory and run
-#      skills.txt   one skill per line          (default skills list)
+#      skills.csv   skill[,weight] per line     (default skills list; weight defaults to 1.0)
 #      project.md   the project description     (default project description)
 resume-reviewer .\resumes --output evaluations.xlsx
 ```
@@ -127,7 +127,7 @@ uv run resume-reviewer ./resumes \
 | Flag | Description |
 |---|---|
 | `resumes_dir` | Directory containing resumes (`.pdf`, `.docx`, `.txt`, `.md`) |
-| `--skills` / `--skills-file` | Comma-separated list, or a file with one skill per line (default: `skills.txt` in the current directory) |
+| `--skills` / `--skills-file` | Comma-separated list (all weight 1.0), or a CSV file with `skill[,weight]` per line (default: `skills.csv`, or legacy `skills.txt`, in the current directory) |
 | `--project` / `--project-file` | Project description text or file (default: `project.md` in the current directory) |
 | `--prompt` / `--prompt-file` | Additional evaluation instructions (optional) |
 | `--output` | Output `.xlsx` path (default: `evaluations.xlsx`) |
@@ -139,6 +139,23 @@ uv run resume-reviewer ./resumes \
 | `--screen` | Enable the two-tier low-cost screening mode (see below) |
 | `--screen-model` | Screening model (default: `claude-haiku-4-5`) |
 | `--screen-cutoff` | Minimum screening score to advance to full evaluation (default: 3) |
+
+## Skill weights
+
+`skills.csv` takes an optional second column: the skill's weight (default
+`1.0`). Weights express relative importance to the project — they are passed
+to the model (informing the overall fit score, recommendation, and team
+selection), shown in the skill column headers when not 1.0, and used to
+compute the **Weighted avg (1-5)** column on the Summary sheet
+(`Σ score×weight / Σ weight`). Individual skill scores stay unweighted,
+evidence-based 1-5. Quote skill names that contain commas:
+
+```csv
+# skill,weight   (weight is optional and defaults to 1.0)
+Powershell scripting,2.0
+Terraform
+"Communication, stakeholder management",0.5
+```
 
 ## Team selection
 

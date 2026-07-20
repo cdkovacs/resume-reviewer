@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
+import io
 import json
 import os
 import sys
@@ -35,7 +37,8 @@ import anthropic
 from pydantic import BaseModel, Field, ValidationError
 
 RESUME_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
-DEFAULT_SKILLS_FILE = "skills.txt"
+DEFAULT_SKILLS_FILE = "skills.csv"
+LEGACY_SKILLS_FILE = "skills.txt"  # parses fine as a one-column CSV
 DEFAULT_PROJECT_FILE = "project.md"
 DEFAULT_MODEL = "claude-opus-4-8"
 DEFAULT_SCREEN_MODEL = "claude-haiku-4-5"
@@ -63,6 +66,32 @@ class ResumeEvaluation(BaseModel):
     skill_evaluations: List[SkillEvaluation] = Field(
         description="One entry per skill in the skills list, in the same order"
     )
+
+
+@dataclass(frozen=True)
+class Skill:
+    name: str
+    weight: float = 1.0
+
+
+def parse_skills_csv(text: str, source: str) -> List[Skill]:
+    """Parse `skill[,weight]` lines; weight defaults to 1.0. Blank lines and
+    #-comments are skipped. A plain one-skill-per-line file parses unchanged."""
+    skills: List[Skill] = []
+    for row in csv.reader(io.StringIO(text)):
+        if not row or not row[0].strip() or row[0].lstrip().startswith("#"):
+            continue
+        name = row[0].strip()
+        weight = 1.0
+        if len(row) > 1 and row[1].strip():
+            try:
+                weight = float(row[1])
+            except ValueError:
+                sys.exit(f"error: invalid weight {row[1].strip()!r} for skill {name!r} in {source}")
+            if weight <= 0:
+                sys.exit(f"error: weight for skill {name!r} in {source} must be > 0")
+        skills.append(Skill(name=name, weight=weight))
+    return skills
 
 
 class TeamSelection(BaseModel):
@@ -159,15 +188,18 @@ def resolve_model(provider: str, explicit: Optional[str]) -> str:
 # Evaluation
 # --------------------------------------------------------------------------
 
-def build_system_prompt(prompt: str, project: str, skills: List[str]) -> str:
-    skills_list = "\n".join(f"- {s}" for s in skills)
+def build_system_prompt(prompt: str, project: str, skills: List[Skill]) -> str:
+    skills_list = "\n".join(f"- {s.name} (weight: {s.weight:g})" for s in skills)
     sections = [
         "You are an experienced technical recruiter and hiring manager. "
         "Evaluate the resume you are given against the project description and skills below. "
         "Base every score strictly on evidence in the resume; do not give the benefit of the doubt "
         "for skills that are not demonstrated. Score each skill from 1 (no evidence) to 5 "
         "(expert with strong direct evidence). Provide one skill_evaluations entry per listed "
-        "skill, using the exact skill names given, in the same order.",
+        "skill, using the exact skill names given, in the same order. "
+        "Each skill's weight indicates its relative importance to this project: individual "
+        "skill scores stay evidence-based and unweighted, but weights should inform the "
+        "overall fit score, recommendation, and any team selection.",
         f"<project_description>\n{project}\n</project_description>",
         f"<skills_to_evaluate>\n{skills_list}\n</skills_to_evaluate>",
     ]
@@ -353,7 +385,7 @@ RECOMMENDATION_FILLS = {
 
 def write_workbook(
     results: List[Result],
-    skills: List[str],
+    skills: List[Skill],
     output: Path,
     team: Optional[tuple] = None,  # (members: List[(Result, ResumeEvaluation)], rationale: str)
 ) -> None:
@@ -372,12 +404,26 @@ def write_workbook(
             cell.fill = header_fill
         ws.freeze_panes = "A2"
 
+    def skill_label(s: Skill) -> str:
+        return f"{s.name} (1-5)" if s.weight == 1.0 else f"{s.name} (1-5, w={s.weight:g})"
+
+    def weighted_avg(ev: ResumeEvaluation) -> object:
+        scores_by_skill = {se.skill.strip().lower(): se.score for se in ev.skill_evaluations}
+        pairs = [
+            (scores_by_skill[s.name.strip().lower()], s.weight)
+            for s in skills
+            if s.name.strip().lower() in scores_by_skill
+        ]
+        if not pairs:
+            return ""
+        return round(sum(score * w for score, w in pairs) / sum(w for _, w in pairs), 2)
+
     # --- Summary sheet -----------------------------------------------------
     ws = wb.active
     assert ws is not None
     ws.title = "Summary"
-    headers = ["Candidate", "File", "Overall (1-5)", "Recommendation", "Stage"]
-    headers += [f"{s} (1-5)" for s in skills]
+    headers = ["Candidate", "File", "Overall (1-5)", "Weighted avg (1-5)", "Recommendation", "Stage"]
+    headers += [skill_label(s) for s in skills]
     headers += ["Strengths", "Gaps", "Summary"]
     ws.append(headers)
 
@@ -386,11 +432,12 @@ def write_workbook(
 
     for r, ev in ok:
         scores_by_skill = {se.skill.strip().lower(): se.score for se in ev.skill_evaluations}
-        row = [ev.candidate_name, r.file.name, ev.overall_score, ev.recommendation, r.stage]
-        row += [scores_by_skill.get(s.strip().lower(), "") for s in skills]
+        row = [ev.candidate_name, r.file.name, ev.overall_score, weighted_avg(ev),
+               ev.recommendation, r.stage]
+        row += [scores_by_skill.get(s.name.strip().lower(), "") for s in skills]
         row += ["\n".join(ev.strengths), "\n".join(ev.gaps), ev.summary]
         ws.append(row)
-        rec_cell = ws.cell(row=ws.max_row, column=4)
+        rec_cell = ws.cell(row=ws.max_row, column=5)
         fill = RECOMMENDATION_FILLS.get(ev.recommendation)
         if fill:
             rec_cell.fill = PatternFill("solid", fgColor=fill)
@@ -398,7 +445,7 @@ def write_workbook(
             ws.cell(row=ws.max_row, column=col).alignment = wrap
 
     style_header(ws)
-    widths = [24, 24, 12, 15, 13] + [14] * len(skills) + [45, 45, 60]
+    widths = [24, 24, 12, 14, 15, 13] + [14] * len(skills) + [45, 45, 60]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -406,17 +453,17 @@ def write_workbook(
     if team is not None:
         members, rationale = team
         ws_t = wb.create_sheet("Team", 1)
-        t_headers = ["Candidate", "Overall (1-5)"] + [f"{s} (1-5)" for s in skills]
+        t_headers = ["Candidate", "Overall (1-5)"] + [skill_label(s) for s in skills]
         ws_t.append(t_headers)
         for _, ev in members:
             scores_by_skill = {se.skill.strip().lower(): se.score for se in ev.skill_evaluations}
             ws_t.append(
                 [ev.candidate_name, ev.overall_score]
-                + [scores_by_skill.get(s.strip().lower(), "") for s in skills]
+                + [scores_by_skill.get(s.name.strip().lower(), "") for s in skills]
             )
         totals = []
         for s in skills:
-            key = s.strip().lower()
+            key = s.name.strip().lower()
             totals.append(
                 sum(
                     se.score
@@ -496,10 +543,11 @@ def main() -> int:
         "--project-file",
         help=f"File containing the project description (default: {DEFAULT_PROJECT_FILE} if present)",
     )
-    parser.add_argument("--skills", help="Comma-separated list of skills to evaluate")
+    parser.add_argument("--skills", help="Comma-separated list of skills to evaluate (all weight 1.0)")
     parser.add_argument(
         "--skills-file",
-        help=f"File with one skill per line (default: {DEFAULT_SKILLS_FILE} if present)",
+        help=f"CSV file with `skill[,weight]` per line; weight defaults to 1.0 "
+        f"(default: {DEFAULT_SKILLS_FILE}, or legacy {LEGACY_SKILLS_FILE}, if present)",
     )
     parser.add_argument("--output", default="evaluations.xlsx", help="Output .xlsx path (default: evaluations.xlsx)")
     parser.add_argument(
@@ -557,20 +605,20 @@ def main() -> int:
     skills_text = read_arg_or_file(args.skills, args.skills_file, "skills", required=False)
     if skills_text:
         if args.skills_file:
-            skills = [line.strip() for line in skills_text.splitlines() if line.strip()]
+            skills = parse_skills_csv(skills_text, args.skills_file)
         else:
-            skills = [s.strip() for s in skills_text.split(",") if s.strip()]
-    elif Path(DEFAULT_SKILLS_FILE).is_file():
-        skills = [
-            line.strip()
-            for line in Path(DEFAULT_SKILLS_FILE).read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+            skills = [Skill(name=s.strip()) for s in skills_text.split(",") if s.strip()]
     else:
-        sys.exit(
-            f"error: provide --skills/--skills-file, or create {DEFAULT_SKILLS_FILE} "
-            "in the current directory"
-        )
+        for candidate_file in (DEFAULT_SKILLS_FILE, LEGACY_SKILLS_FILE):
+            path = Path(candidate_file)
+            if path.is_file():
+                skills = parse_skills_csv(path.read_text(encoding="utf-8"), candidate_file)
+                break
+        else:
+            sys.exit(
+                f"error: provide --skills/--skills-file, or create {DEFAULT_SKILLS_FILE} "
+                "in the current directory"
+            )
     if not skills:
         sys.exit("error: no skills provided")
 

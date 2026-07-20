@@ -1,6 +1,0 @@
-Python
-Kubernetes
-Terraform
-CI/CD (GitHub Actions)
-AWS
-Communication and stakeholder management

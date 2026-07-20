@@ -1,0 +1,7 @@
+# skill,weight   (weight is optional and defaults to 1.0)
+Python,2.0
+Kubernetes,1.5
+Terraform
+CI/CD (GitHub Actions)
+AWS
+"Communication, stakeholder management",0.5
