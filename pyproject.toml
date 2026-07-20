@@ -1,6 +1,6 @@
 [project]
 name = "resume-reviewer"
-version = "0.1.1"
+version = "0.1.2"
 description = "Evaluate a directory of resumes against skills and a project description with Claude (ICA by default); export results to Excel"
 readme = "README.md"
 requires-python = ">=3.10"
