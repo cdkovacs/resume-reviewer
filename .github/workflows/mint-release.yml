@@ -1,0 +1,104 @@
+# Mint the next semantic version from commit history and cut a release on
+# EVERY push to main (unlike oneclick-cli's manual-dispatch variant this is
+# adapted from). paulhatch/semantic-version computes the next version from
+# commit markers (a `feat:` commit bumps minor, a `!:`/`BREAKING CHANGE:`
+# bumps major, anything else bumps patch). The job then writes that version
+# into pyproject.toml (the single source of truth), commits and pushes the
+# `vX.Y.Z` tag, and invokes release.yml to build + attach the artifacts.
+#
+# Recursion guard: the bump commit and tag are pushed with the default
+# GITHUB_TOKEN, which does not fire `on: push` workflows — so this run does
+# not retrigger itself; release.yml is invoked directly via workflow_call.
+name: mint-release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute and print the next version without tagging or releasing."
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  mint:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+      version_tag: ${{ steps.semver.outputs.version_tag }}
+      changed: ${{ steps.semver.outputs.changed }}
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compute the next semantic version
+        id: semver
+        uses: paulhatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: "v"
+          major_pattern: "/!:|BREAKING CHANGE:/"
+          minor_pattern: "/feat(\\(.+\\))?:/"
+          version_format: "${major}.${minor}.${patch}"
+          bump_each_commit: false
+
+      - name: Report the computed version
+        run: |
+          echo "next version: ${{ steps.semver.outputs.version_tag }} (changed=${{ steps.semver.outputs.changed }})"
+
+      - name: Install uv
+        # Needed to regenerate uv.lock in lockstep with the pyproject bump.
+        # setup-uv >= 8 tags are immutable full-version tags; pin explicitly.
+        if: ${{ inputs.dry_run == false && steps.semver.outputs.changed == 'true' }}
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+
+      - name: Bump pyproject + uv.lock, commit, and push the tag
+        if: ${{ inputs.dry_run == false && steps.semver.outputs.changed == 'true' }}
+        env:
+          VERSION: ${{ steps.semver.outputs.version }}
+          VERSION_TAG: ${{ steps.semver.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          # Rewrite only the first `version = "..."` (the [project] one).
+          sed -i -E "0,/^version = \".*\"/s//version = \"${VERSION}\"/" pyproject.toml
+          # Regenerate uv.lock so its pinned root-package version tracks
+          # pyproject; only the root version moves, dependency pins are
+          # unchanged.
+          uv lock
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml uv.lock
+          # A human may have already committed the target version. In that case
+          # nothing is staged; skip the commit but still tag and release so the
+          # run is idempotent instead of aborting on "nothing to commit".
+          if git diff --cached --quiet; then
+            echo "::notice::pyproject/uv.lock already at ${VERSION}; tagging without a new commit"
+          else
+            git commit -m "chore(release): ${VERSION_TAG}"
+          fi
+          git tag -a "${VERSION_TAG}" -m "${VERSION_TAG}"
+          git push origin "HEAD:main"
+          git push origin "${VERSION_TAG}"
+
+      - name: Nothing to release
+        if: ${{ steps.semver.outputs.changed != 'true' }}
+        run: echo "::notice::no commits since the last release tag; nothing to mint"
+
+  # Build + attach artifacts for the freshly-pushed tag. Invoked directly (not
+  # via the tag push, which the default token cannot trigger).
+  release:
+    needs: mint
+    if: ${{ inputs.dry_run == false && needs.mint.outputs.changed == 'true' }}
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.mint.outputs.version_tag }}
+    permissions:
+      contents: write

@@ -1,0 +1,75 @@
+# Build the wheel + sdist for a released version and attach them to a GitHub
+# Release. A `v*` semver tag is the trigger. The tag is normally minted by
+# mint-release.yml, which also invokes this workflow directly via
+# `workflow_call` (a tag pushed with the default GITHUB_TOKEN does NOT fire
+# `on: push` workflows, so the mint job calls us rather than relying on the
+# push event). A human-pushed `v*` tag triggers the `push` path the same way.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to build and release (set when invoked by mint-release.yml)."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v6
+        with:
+          # `inputs.tag` is set on the workflow_call path; on the push path it
+          # is empty and github.ref_name is the tag.
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - name: Install uv
+        # setup-uv >= 8 tags are immutable full-version tags; pin explicitly.
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+
+      - name: Assert the tag matches the pyproject version
+        env:
+          REF_NAME: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_version="${REF_NAME#v}"
+          proj_version="$(grep -E '^version = ' pyproject.toml | head -1 | cut -d '"' -f2)"
+          if [ "$tag_version" != "$proj_version" ]; then
+            echo "::error::tag ${REF_NAME} (version ${tag_version}) does not match pyproject version ${proj_version}"
+            exit 1
+          fi
+          echo "releasing resume-reviewer ${proj_version}"
+
+      - name: Smoke-check the package
+        # No test suite yet; verify the module compiles and the console script
+        # resolves and runs.
+        run: |
+          set -euo pipefail
+          uv sync
+          uv run python -m py_compile resume_reviewer.py
+          uv run resume-reviewer --help > /dev/null
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Create the GitHub Release with the artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "${REF_NAME}" \
+            dist/*.whl dist/*.tar.gz \
+            --title "${REF_NAME}" \
+            --generate-notes \
+            --verify-tag
