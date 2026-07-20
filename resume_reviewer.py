@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import os
 import sys
 import threading
@@ -61,6 +62,17 @@ class ResumeEvaluation(BaseModel):
     gaps: List[str] = Field(description="Notable gaps or risks relative to the project needs")
     skill_evaluations: List[SkillEvaluation] = Field(
         description="One entry per skill in the skills list, in the same order"
+    )
+
+
+class TeamSelection(BaseModel):
+    selected_candidates: List[str] = Field(
+        description="Names of exactly the requested number of candidates, copied verbatim "
+        "from the provided candidate list"
+    )
+    rationale: str = Field(
+        description="Why this mix forms the strongest overall team: skill coverage, "
+        "complementary profiles, and any tradeoffs made"
     )
 
 
@@ -283,6 +295,50 @@ def screen_resume(
     )
 
 
+def select_team(
+    client: anthropic.Anthropic,
+    model: str,
+    system_prompt: str,
+    pool: List[tuple],
+    size: int,
+) -> TeamSelection:
+    """Ask the model to pick the strongest complementary team from the pool.
+
+    Reuses the same cached system prompt (project + skills) as the evaluations.
+    """
+    candidates = []
+    for _, ev in pool:
+        candidates.append(
+            {
+                "name": ev.candidate_name,
+                "overall_score": ev.overall_score,
+                "recommendation": ev.recommendation,
+                "skill_scores": {se.skill: se.score for se in ev.skill_evaluations},
+                "strengths": ev.strengths,
+                "gaps": ev.gaps,
+                "summary": ev.summary,
+            }
+        )
+    user_text = (
+        f"Below are structured evaluations of {len(pool)} candidates for this project.\n\n"
+        f"{json.dumps(candidates, indent=1)}\n\n"
+        f"Select the {size} candidates who together form the strongest overall team for the "
+        "project. Optimize the mix, not just individual scores: every skill area should be "
+        "covered by at least one strong member, weight the project's critical initiatives "
+        "most heavily, and prefer complementary profiles over redundant ones. Return exactly "
+        f"{size} names, copied verbatim from the list above."
+    )
+    return call_structured(
+        client,
+        model,
+        system_prompt,
+        [{"type": "text", "text": user_text}],
+        TeamSelection,
+        tool_name="record_team_selection",
+        max_tokens=8000,
+    )
+
+
 # --------------------------------------------------------------------------
 # Excel export
 # --------------------------------------------------------------------------
@@ -295,7 +351,12 @@ RECOMMENDATION_FILLS = {
 }
 
 
-def write_workbook(results: List[Result], skills: List[str], output: Path) -> None:
+def write_workbook(
+    results: List[Result],
+    skills: List[str],
+    output: Path,
+    team: Optional[tuple] = None,  # (members: List[(Result, ResumeEvaluation)], rationale: str)
+) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -340,6 +401,47 @@ def write_workbook(results: List[Result], skills: List[str], output: Path) -> No
     widths = [24, 24, 12, 15, 13] + [14] * len(skills) + [45, 45, 60]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
+
+    # --- Team sheet (second tab, when a target team size was given) --------
+    if team is not None:
+        members, rationale = team
+        ws_t = wb.create_sheet("Team", 1)
+        t_headers = ["Candidate", "Overall (1-5)"] + [f"{s} (1-5)" for s in skills]
+        ws_t.append(t_headers)
+        for _, ev in members:
+            scores_by_skill = {se.skill.strip().lower(): se.score for se in ev.skill_evaluations}
+            ws_t.append(
+                [ev.candidate_name, ev.overall_score]
+                + [scores_by_skill.get(s.strip().lower(), "") for s in skills]
+            )
+        totals = []
+        for s in skills:
+            key = s.strip().lower()
+            totals.append(
+                sum(
+                    se.score
+                    for _, ev in members
+                    for se in ev.skill_evaluations
+                    if se.skill.strip().lower() == key
+                )
+            )
+        ws_t.append(["Team skill total", ""] + totals)
+        for cell in ws_t[ws_t.max_row]:
+            cell.font = header_font
+            cell.fill = header_fill
+        ws_t.append([])
+        ws_t.append(["Selection rationale", rationale])
+        rat_cell = ws_t.cell(row=ws_t.max_row, column=2)
+        rat_cell.alignment = wrap
+        ws_t.merge_cells(
+            start_row=ws_t.max_row, start_column=2,
+            end_row=ws_t.max_row, end_column=len(t_headers),
+        )
+        style_header(ws_t)
+        ws_t.column_dimensions["A"].width = 24
+        ws_t.column_dimensions["B"].width = 12
+        for i in range(3, len(t_headers) + 1):
+            ws_t.column_dimensions[get_column_letter(i)].width = 14
 
     # --- Details sheet -----------------------------------------------------
     ws_d = wb.create_sheet("Skill Details")
@@ -413,6 +515,12 @@ def main() -> int:
         help=f"Claude model ID (default: env ICA_MODEL / CLAUDE_MODEL, else {DEFAULT_MODEL})",
     )
     parser.add_argument("--workers", type=int, default=4, help="Concurrent evaluations (default: 4)")
+    parser.add_argument(
+        "--team-size",
+        type=int,
+        help="Target team size: adds a Team tab with the strongest mix of N candidates "
+        "and per-skill score totals",
+    )
     parser.add_argument(
         "--screen",
         action="store_true",
@@ -544,8 +652,49 @@ def main() -> int:
     else:
         results = run_all(files, full_eval, "eval")
 
+    team = None
+    if args.team_size:
+        pool = [
+            (r, r.evaluation)
+            for r in results
+            if r.evaluation and r.stage == "full" and r.evaluation.skill_evaluations
+        ]
+        if not pool:
+            print("warning: --team-size given but no fully-evaluated candidates; skipping Team sheet")
+        else:
+            size = min(args.team_size, len(pool))
+            if size < args.team_size:
+                print(
+                    f"warning: only {len(pool)} fully-evaluated candidate(s); "
+                    f"team size reduced to {size}"
+                )
+            print(f"Selecting the strongest team of {size} with {model}...")
+            try:
+                selection = select_team(client, model, system_prompt, pool, size)
+                by_name = {ev.candidate_name.strip().lower(): (r, ev) for r, ev in pool}
+                members = []
+                for name in selection.selected_candidates:
+                    entry = by_name.get(name.strip().lower())
+                    if entry is not None and entry not in members:
+                        members.append(entry)
+                # Top up with best-by-overall if the model returned unknown
+                # names or too few; trim if too many.
+                if len(members) < size:
+                    for entry in sorted(pool, key=lambda p: p[1].overall_score, reverse=True):
+                        if entry not in members:
+                            members.append(entry)
+                        if len(members) == size:
+                            break
+                team = (members[:size], selection.rationale)
+            except Exception as exc:
+                print(f"warning: team selection failed ({type(exc).__name__}: {exc}); "
+                      f"falling back to top {size} by overall score")
+                members = sorted(pool, key=lambda p: p[1].overall_score, reverse=True)[:size]
+                team = (members, f"Fallback: top {size} candidates by overall score "
+                                 "(model-based team selection failed).")
+
     output = Path(args.output)
-    write_workbook(results, skills, output)
+    write_workbook(results, skills, output, team=team)
 
     succeeded = sum(1 for r in results if r.evaluation)
     print(f"\nWrote {output} — {succeeded} evaluated, {len(results) - succeeded} failed.")

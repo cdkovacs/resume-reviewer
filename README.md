@@ -135,9 +135,29 @@ uv run resume-reviewer ./resumes \
 | `--host` | Base URL override for the ICA backend |
 | `--model` | Claude model for full evaluations (default: `ICA_MODEL`/`CLAUDE_MODEL` env, else `claude-opus-4-8`) |
 | `--workers` | Concurrent evaluations (default: 4) |
+| `--team-size` | Target team size: adds a **Team** tab with the strongest mix of N candidates and per-skill score totals |
 | `--screen` | Enable the two-tier low-cost screening mode (see below) |
 | `--screen-model` | Screening model (default: `claude-haiku-4-5`) |
 | `--screen-cutoff` | Minimum screening score to advance to full evaluation (default: 3) |
+
+## Team selection
+
+With `--team-size N`, a **Team** tab is added (second tab, after Summary)
+showing the mix of N candidates that forms the strongest overall team. The
+selection is made by the model from the full evaluations, optimizing for
+complementary skill coverage — every skill area covered by at least one strong
+member, weighted toward the project's critical initiatives — rather than just
+the top N individual scores. The bottom of the team list has a **Team skill
+total** row summing each skill column, indicating the team's strength in that
+area, followed by the selection rationale.
+
+```sh
+uv run resume-reviewer ./resumes --team-size 5
+```
+
+Only fully-evaluated candidates are considered (with `--screen`, screened-out
+candidates are excluded). If the selection call fails, the tab falls back to
+the top N by overall score and says so in the rationale.
 
 ## Cost control: two-tier screening
 
