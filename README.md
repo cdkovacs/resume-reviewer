@@ -135,7 +135,9 @@ uv run resume-reviewer ./resumes \
 | `--host` | Base URL override for the ICA backend |
 | `--model` | Claude model for full evaluations (default: `ICA_MODEL`/`CLAUDE_MODEL` env, else `claude-opus-4-8`) |
 | `--workers` | Concurrent evaluations (default: 4) |
-| `--team-size` | Target team size: adds a **Team** tab with the strongest mix of N candidates and per-skill score totals |
+| `--team-size` | Target team size: adds a **Team** tab with the strongest mix of N candidates and per-skill score totals — or four cost-shaped teams when rates are available (see Staffing rates) |
+| `--rates` | Rates table `.xlsx` with columns Country, Line, Band, Rate, Currency (default: `rates.xlsx`, then `~/staffing/rates.xlsx`) |
+| `--staff-rates` | Staff rates workbook to create/update (default: `staff-rates.xlsx`; pass `''` to disable) |
 | `--screen` | Enable the two-tier low-cost screening mode (see below) |
 | `--screen-model` | Screening model (default: `claude-haiku-4-5`) |
 | `--screen-cutoff` | Minimum screening score to advance to full evaluation (default: 3) |
@@ -175,6 +177,42 @@ uv run resume-reviewer ./resumes --team-size 5
 Only fully-evaluated candidates are considered (with `--screen`, screened-out
 candidates are excluded). If the selection call fails, the tab falls back to
 the top N by overall score and says so in the rationale.
+
+## Staffing rates and cost-shaped teams
+
+After each run, every evaluated candidate is synced into **`staff-rates.xlsx`**
+(columns: Name, Geo, Line, Band, Rate, Currency). Candidates already present
+are skipped — their rows are never modified — and new candidates are appended
+with blank Geo/Line/Band. The workflow is two-phase:
+
+1. **First run** scaffolds `staff-rates.xlsx`. The staffing team fills in each
+   person's Geo (e.g. `US`), Line, and Band.
+2. **Re-run**: rows with Geo/Line/Band populated get their cost Rate and
+   Currency looked up from the rates table (`--rates`, defaulting to
+   `rates.xlsx` then `~/staffing/rates.xlsx`; columns Country, Line, Band,
+   Rate, Currency). Unmatched combinations are reported.
+
+Once **every** evaluated candidate has a rate and `--team-size N` is given,
+the single Team tab is replaced by a **Team Shapes** tab with four teams of N,
+each with a decent skill fit but a different cost posture:
+
+| Shape | Objective |
+|---|---|
+| low cost | Minimize average cost rate while keeping an acceptable skill fit |
+| medium cost | Balance cost and skill fit |
+| high cost | Favor premium, senior talent where it buys real skill |
+| cost not considered | The strongest possible skill fit, ignoring cost |
+
+The tab opens with a comparison table — each shape's **skill fit score**
+(weighted coverage on the 1–5 scale: each skill counts as the team's best
+member on that skill) and **average cost rate** — so the staffing team can see
+what a rate difference buys in skill. Below it, each team is broken out with
+member rates, per-skill scores, skill totals, and the selection rationale.
+Membership is chosen by the model; fit scores and averages are computed
+deterministically so the four shapes are directly comparable.
+
+`staff-rates.xlsx` and rate tables are `.gitignore`d — they contain names and
+rates and should not be committed.
 
 ## Cost control: two-tier screening
 

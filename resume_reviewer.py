@@ -40,6 +40,9 @@ RESUME_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 DEFAULT_SKILLS_FILE = "skills.csv"
 LEGACY_SKILLS_FILE = "skills.txt"  # parses fine as a one-column CSV
 DEFAULT_PROJECT_FILE = "project.md"
+DEFAULT_STAFF_RATES_FILE = "staff-rates.xlsx"
+DEFAULT_RATES_CANDIDATES = ("rates.xlsx", "~/staffing/rates.xlsx")
+TEAM_SHAPES = ("low cost", "medium cost", "high cost", "cost not considered")
 DEFAULT_MODEL = "claude-opus-4-8"
 DEFAULT_SCREEN_MODEL = "claude-haiku-4-5"
 # The /ica root, NOT /ica/v1 — the SDK appends /v1/messages itself.
@@ -105,6 +108,22 @@ class TeamSelection(BaseModel):
     )
 
 
+class TeamShapeSelection(BaseModel):
+    shape: Literal["low cost", "medium cost", "high cost", "cost not considered"]
+    members: List[str] = Field(
+        description="Names of exactly the requested number of candidates for this shape, "
+        "copied verbatim from the provided list"
+    )
+    rationale: str = Field(description="Why this mix fits the shape's cost/skill objective")
+
+
+class TeamShapesSelection(BaseModel):
+    shapes: List[TeamShapeSelection] = Field(
+        description="Exactly four entries, one per shape: low cost, medium cost, "
+        "high cost, cost not considered"
+    )
+
+
 class ScreenResult(BaseModel):
     candidate_name: str = Field(description="Candidate's full name as it appears on the resume")
     overall_score: int = Field(description="Overall fit for the project, 1 (poor fit) to 5 (excellent fit)")
@@ -152,6 +171,121 @@ def resume_content_block(path: Path) -> dict:
     if not text.strip():
         raise ValueError("resume file is empty after text extraction")
     return {"type": "text", "text": f"<resume>\n{text}\n</resume>"}
+
+
+# --------------------------------------------------------------------------
+# Staff rates
+# --------------------------------------------------------------------------
+
+@dataclass
+class StaffInfo:
+    name: str
+    geo: str = ""
+    line: str = ""
+    band: str = ""
+    rate: Optional[float] = None
+    currency: str = ""
+
+
+def _norm(value) -> str:
+    return str(value).strip().upper() if value is not None else ""
+
+
+def load_rates(path: Path) -> dict:
+    """Rates table: (geo, line, band) -> (rate, currency). Header row is
+    Country, Line, Band, Rate, Currency."""
+    from openpyxl import load_workbook
+
+    ws = load_workbook(path, data_only=True).active
+    assert ws is not None
+    rates = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        country, line, band, rate, currency = (list(row) + [None] * 5)[:5]
+        if country is None or line is None or band is None or rate is None:
+            continue
+        try:
+            rate_value = float(rate)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        rates[(_norm(country), _norm(line), _norm(band))] = (rate_value, str(currency or ""))
+    return rates
+
+
+def sync_staff_rates(
+    staff_path: Path,
+    candidate_names: List[str],
+    rates: Optional[dict],
+) -> dict:
+    """Create/update staff-rates.xlsx and return {normalized name: StaffInfo}.
+
+    Existing rows are never modified except to fill in Rate/Currency when
+    Geo/Line/Band are populated and a rates table is available. Candidates not
+    yet present are appended with blank Geo/Line/Band for the staffing team to
+    fill in.
+    """
+    from openpyxl import Workbook, load_workbook
+
+    headers = ["Name", "Geo", "Line", "Band", "Rate", "Currency"]
+    if staff_path.is_file():
+        wb = load_workbook(staff_path)
+        ws = wb.active
+        assert ws is not None
+        if [c.value for c in ws[1]][: len(headers)] != headers:
+            sys.exit(f"error: {staff_path} does not have the expected header row {headers}")
+    else:
+        wb = Workbook()
+        ws = wb.active
+        assert ws is not None
+        ws.title = "Staff Rates"
+        ws.append(headers)
+        from openpyxl.styles import Font, PatternFill
+
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="D9E1F2")
+        ws.freeze_panes = "A2"
+        for col, width in zip("ABCDEF", [28, 10, 30, 8, 10, 10]):
+            ws.column_dimensions[col].width = width
+
+    staff: dict = {}
+    unmatched: List[str] = []
+    for row in ws.iter_rows(min_row=2):
+        name = row[0].value
+        if not name or not str(name).strip():
+            continue
+        info = StaffInfo(
+            name=str(name).strip(),
+            geo=str(row[1].value or "").strip(),
+            line=str(row[2].value or "").strip(),
+            band=str(row[3].value or "").strip(),
+            rate=float(row[4].value) if row[4].value is not None else None,  # type: ignore[arg-type]
+            currency=str(row[5].value or "").strip(),
+        )
+        # Fill in the rate whenever Geo/Line/Band are populated and we have a
+        # rates table (also refreshes stale rates after a rates-file update).
+        if rates is not None and info.geo and info.line and info.band:
+            hit = rates.get((_norm(info.geo), _norm(info.line), _norm(info.band)))
+            if hit:
+                info.rate, info.currency = hit
+                row[4].value, row[5].value = info.rate, info.currency
+            else:
+                unmatched.append(f"{info.name} ({info.geo}/{info.line}/{info.band})")
+        staff[info.name.lower()] = info
+
+    added = 0
+    for name in candidate_names:
+        if name.strip().lower() not in staff:
+            ws.append([name, "", "", "", None, ""])
+            staff[name.strip().lower()] = StaffInfo(name=name)
+            added += 1
+
+    wb.save(staff_path)
+    if added:
+        print(f"staff-rates: added {added} new candidate(s) to {staff_path} — "
+              "fill in Geo/Line/Band and re-run to compute rates")
+    if unmatched:
+        print("warning: no rate found in the rates table for: " + "; ".join(unmatched))
+    return staff
 
 
 # --------------------------------------------------------------------------
@@ -371,6 +505,103 @@ def select_team(
     )
 
 
+@dataclass
+class ShapeResult:
+    shape: str
+    members: List[tuple]  # [(Result, ResumeEvaluation)]
+    rationale: str
+    fit_score: float
+    avg_rate: float
+    currency: str
+
+
+def team_fit_score(members: List[tuple], skills: List[Skill]) -> float:
+    """Weighted skill coverage: each skill counts as the best member's score."""
+    total = 0.0
+    for s in skills:
+        key = s.name.strip().lower()
+        best = max(
+            (se.score for _, ev in members for se in ev.skill_evaluations
+             if se.skill.strip().lower() == key),
+            default=0,
+        )
+        total += best * s.weight
+    return round(total / sum(s.weight for s in skills), 2)
+
+
+def shape_metrics(shape: str, members: List[tuple], rationale: str,
+                  skills: List[Skill], staff: dict) -> ShapeResult:
+    rates = [staff[ev.candidate_name.strip().lower()].rate for _, ev in members]
+    currencies = sorted({staff[ev.candidate_name.strip().lower()].currency for _, ev in members})
+    return ShapeResult(
+        shape=shape,
+        members=members,
+        rationale=rationale,
+        fit_score=team_fit_score(members, skills),
+        avg_rate=round(sum(rates) / len(rates), 2),
+        currency=currencies[0] if len(currencies) == 1 else "MIXED: " + ", ".join(currencies),
+    )
+
+
+def greedy_best_fit(pool: List[tuple], skills: List[Skill], size: int) -> List[tuple]:
+    """Fallback: iteratively add the candidate that raises team fit the most."""
+    team: List[tuple] = []
+    remaining = list(pool)
+    while len(team) < size and remaining:
+        best = max(remaining, key=lambda entry: (team_fit_score(team + [entry], skills),
+                                                 entry[1].overall_score))
+        team.append(best)
+        remaining.remove(best)
+    return team
+
+
+def select_team_shapes(
+    client: anthropic.Anthropic,
+    model: str,
+    system_prompt: str,
+    pool: List[tuple],
+    staff: dict,
+    size: int,
+) -> TeamShapesSelection:
+    """One call: pick four teams of `size` optimizing different cost postures."""
+    candidates = []
+    for _, ev in pool:
+        info = staff[ev.candidate_name.strip().lower()]
+        candidates.append(
+            {
+                "name": ev.candidate_name,
+                "overall_score": ev.overall_score,
+                "skill_scores": {se.skill: se.score for se in ev.skill_evaluations},
+                "strengths": ev.strengths,
+                "gaps": ev.gaps,
+                "cost_rate": info.rate,
+                "currency": info.currency,
+            }
+        )
+    user_text = (
+        f"Below are structured evaluations of {len(pool)} candidates, each with an hourly "
+        f"cost rate.\n\n{json.dumps(candidates, indent=1)}\n\n"
+        f"Build FOUR teams of exactly {size} members each — every team must have a decent "
+        "skill fit (each skill area covered by at least one capable member wherever the pool "
+        "allows, weighted toward the project's critical initiatives), differing in cost "
+        "posture:\n"
+        "1. 'low cost' — minimize average cost rate while keeping an acceptable skill fit.\n"
+        "2. 'medium cost' — balance cost and skill fit.\n"
+        "3. 'high cost' — favor premium, senior talent where it buys real skill.\n"
+        "4. 'cost not considered' — the strongest possible skill fit, ignoring cost.\n"
+        "Candidates may appear in multiple teams. Return names copied verbatim."
+    )
+    return call_structured(
+        client,
+        model,
+        system_prompt,
+        [{"type": "text", "text": user_text}],
+        TeamShapesSelection,
+        tool_name="record_team_shapes",
+        max_tokens=16000,
+    )
+
+
 # --------------------------------------------------------------------------
 # Excel export
 # --------------------------------------------------------------------------
@@ -388,6 +619,8 @@ def write_workbook(
     skills: List[Skill],
     output: Path,
     team: Optional[tuple] = None,  # (members: List[(Result, ResumeEvaluation)], rationale: str)
+    shapes: Optional[List[ShapeResult]] = None,
+    staff: Optional[dict] = None,
 ) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -448,6 +681,64 @@ def write_workbook(
     widths = [24, 24, 12, 14, 15, 13] + [14] * len(skills) + [45, 45, 60]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
+
+    # --- Team Shapes sheet (second tab, when rates enabled the four shapes) --
+    if shapes:
+        ws_s = wb.create_sheet("Team Shapes", 1)
+        ws_s.append(["Shape", "Skill fit (1-5)", "Avg cost rate", "Currency", "Members"])
+        for sh in shapes:
+            ws_s.append([
+                sh.shape, sh.fit_score, sh.avg_rate, sh.currency,
+                ", ".join(ev.candidate_name for _, ev in sh.members),
+            ])
+            ws_s.cell(row=ws_s.max_row, column=5).alignment = wrap
+        style_header(ws_s)
+
+        block_headers = ["Candidate", "Overall (1-5)", "Rate", "Currency"] + [
+            skill_label(s) for s in skills
+        ]
+        for sh in shapes:
+            ws_s.append([])
+            ws_s.append([f"{sh.shape}  —  skill fit {sh.fit_score}, avg rate "
+                         f"{sh.avg_rate} {sh.currency}"])
+            title_cell = ws_s.cell(row=ws_s.max_row, column=1)
+            title_cell.font = header_font
+            title_cell.fill = header_fill
+            ws_s.merge_cells(start_row=ws_s.max_row, start_column=1,
+                             end_row=ws_s.max_row, end_column=len(block_headers))
+            ws_s.append(block_headers)
+            for cell in ws_s[ws_s.max_row]:
+                cell.font = header_font
+            for _, ev in sh.members:
+                info = (staff or {}).get(ev.candidate_name.strip().lower())
+                scores_by_skill = {se.skill.strip().lower(): se.score
+                                   for se in ev.skill_evaluations}
+                ws_s.append(
+                    [ev.candidate_name, ev.overall_score,
+                     info.rate if info else "", info.currency if info else ""]
+                    + [scores_by_skill.get(s.name.strip().lower(), "") for s in skills]
+                )
+            totals = []
+            for s in skills:
+                key = s.name.strip().lower()
+                totals.append(sum(
+                    se.score for _, ev in sh.members for se in ev.skill_evaluations
+                    if se.skill.strip().lower() == key
+                ))
+            ws_s.append(["Team skill total", "", "", ""] + totals)
+            for cell in ws_s[ws_s.max_row]:
+                cell.font = header_font
+            ws_s.append(["Rationale", sh.rationale])
+            rat = ws_s.cell(row=ws_s.max_row, column=2)
+            rat.alignment = wrap
+            ws_s.merge_cells(start_row=ws_s.max_row, start_column=2,
+                             end_row=ws_s.max_row, end_column=len(block_headers))
+        ws_s.column_dimensions["A"].width = 26
+        for col, width in zip("BCD", [13, 12, 10]):
+            ws_s.column_dimensions[col].width = width
+        ws_s.column_dimensions["E"].width = 40
+        for i in range(5, len(block_headers) + 1):
+            ws_s.column_dimensions[get_column_letter(i)].width = 14
 
     # --- Team sheet (second tab, when a target team size was given) --------
     if team is not None:
@@ -567,7 +858,18 @@ def main() -> int:
         "--team-size",
         type=int,
         help="Target team size: adds a Team tab with the strongest mix of N candidates "
-        "and per-skill score totals",
+        "and per-skill score totals (or four cost-shaped teams when rates are available)",
+    )
+    parser.add_argument(
+        "--rates",
+        help="Rates table .xlsx with columns Country, Line, Band, Rate, Currency "
+        f"(default: first of {', '.join(DEFAULT_RATES_CANDIDATES)} that exists)",
+    )
+    parser.add_argument(
+        "--staff-rates",
+        default=DEFAULT_STAFF_RATES_FILE,
+        help=f"Staff rates workbook to create/update (default: {DEFAULT_STAFF_RATES_FILE}; "
+        "pass an empty string to disable)",
     )
     parser.add_argument(
         "--screen",
@@ -700,7 +1002,38 @@ def main() -> int:
     else:
         results = run_all(files, full_eval, "eval")
 
+    # --- Staff rates sync --------------------------------------------------
+    staff = None
+    evaluated_names = [
+        r.evaluation.candidate_name
+        for r in results
+        if r.evaluation and r.stage == "full" and r.evaluation.skill_evaluations
+    ]
+    if args.staff_rates and evaluated_names:
+        rates = None
+        rates_path = None
+        rates_candidates = [args.rates] if args.rates else list(DEFAULT_RATES_CANDIDATES)
+        for cand in rates_candidates:
+            p = Path(cand).expanduser()
+            if p.is_file():
+                rates_path = p
+                break
+        if args.rates and rates_path is None:
+            sys.exit(f"error: rates file {args.rates} not found")
+        if rates_path is not None:
+            rates = load_rates(rates_path)
+            print(f"Loaded {len(rates)} rate entries from {rates_path}")
+        else:
+            print(
+                "note: no rates table found (looked for "
+                + ", ".join(rates_candidates)
+                + "); syncing staff rates without cost rates"
+            )
+        staff = sync_staff_rates(Path(args.staff_rates), evaluated_names, rates)
+
+    # --- Team selection / team shapes --------------------------------------
     team = None
+    shapes = None
     if args.team_size:
         pool = [
             (r, r.evaluation)
@@ -716,33 +1049,99 @@ def main() -> int:
                     f"warning: only {len(pool)} fully-evaluated candidate(s); "
                     f"team size reduced to {size}"
                 )
-            print(f"Selecting the strongest team of {size} with {model}...")
-            try:
-                selection = select_team(client, model, system_prompt, pool, size)
+
+            def staff_info(ev) -> Optional[StaffInfo]:
+                return (staff or {}).get(ev.candidate_name.strip().lower())
+
+            def rate_of(entry: tuple) -> float:
+                info = staff_info(entry[1])
+                return info.rate if info is not None and info.rate is not None else 0.0
+
+            missing_rates = []
+            for _, ev in pool:
+                info = staff_info(ev)
+                if info is None or info.rate is None:
+                    missing_rates.append(ev.candidate_name)
+            if staff is not None and not missing_rates:
+                # Every evaluated candidate has a cost rate → four team shapes.
                 by_name = {ev.candidate_name.strip().lower(): (r, ev) for r, ev in pool}
-                members = []
-                for name in selection.selected_candidates:
-                    entry = by_name.get(name.strip().lower())
-                    if entry is not None and entry not in members:
-                        members.append(entry)
-                # Top up with best-by-overall if the model returned unknown
-                # names or too few; trim if too many.
-                if len(members) < size:
-                    for entry in sorted(pool, key=lambda p: p[1].overall_score, reverse=True):
-                        if entry not in members:
+                print(f"All candidates have rates — selecting four team shapes of {size} with {model}...")
+
+                def resolve_members(names: List[str]) -> List[tuple]:
+                    members: List[tuple] = []
+                    for name in names:
+                        entry = by_name.get(name.strip().lower())
+                        if entry is not None and entry not in members:
                             members.append(entry)
-                        if len(members) == size:
-                            break
-                team = (members[:size], selection.rationale)
-            except Exception as exc:
-                print(f"warning: team selection failed ({type(exc).__name__}: {exc}); "
-                      f"falling back to top {size} by overall score")
-                members = sorted(pool, key=lambda p: p[1].overall_score, reverse=True)[:size]
-                team = (members, f"Fallback: top {size} candidates by overall score "
-                                 "(model-based team selection failed).")
+                    if len(members) < size:
+                        for entry in sorted(pool, key=lambda p: p[1].overall_score, reverse=True):
+                            if entry not in members:
+                                members.append(entry)
+                            if len(members) == size:
+                                break
+                    return members[:size]
+
+                try:
+                    sel = select_team_shapes(client, model, system_prompt, pool, staff, size)
+                    returned = {s.shape: s for s in sel.shapes}
+                    shapes = []
+                    for shape_name in TEAM_SHAPES:
+                        entry = returned.get(shape_name)
+                        members = resolve_members(entry.members if entry else [])
+                        rationale = entry.rationale if entry else "(model omitted this shape; filled by overall score)"
+                        shapes.append(shape_metrics(shape_name, members, rationale, skills, staff))
+                except Exception as exc:
+                    print(f"warning: team-shape selection failed ({type(exc).__name__}: {exc}); "
+                          "using deterministic fallback shapes")
+                    by_rate = sorted(pool, key=rate_of)
+                    mid = max(0, (len(by_rate) - size) // 2)
+                    fallback = {
+                        "low cost": by_rate[:size],
+                        "medium cost": by_rate[mid:mid + size],
+                        "high cost": by_rate[-size:],
+                        "cost not considered": greedy_best_fit(pool, skills, size),
+                    }
+                    shapes = [
+                        shape_metrics(name, members, "Fallback: selected by cost rate ordering "
+                                      "(model-based selection failed).", skills, staff)
+                        for name, members in fallback.items()
+                    ]
+            elif staff is not None and missing_rates:
+                print(
+                    "note: no team shapes — missing cost rates for: "
+                    + ", ".join(missing_rates)
+                    + f"; populate Geo/Line/Band in {args.staff_rates} and re-run. "
+                    "Building the single Team tab instead."
+                )
+
+            if shapes is None:
+                print(f"Selecting the strongest team of {size} with {model}...")
+                try:
+                    selection = select_team(client, model, system_prompt, pool, size)
+                    by_name = {ev.candidate_name.strip().lower(): (r, ev) for r, ev in pool}
+                    members = []
+                    for name in selection.selected_candidates:
+                        entry = by_name.get(name.strip().lower())
+                        if entry is not None and entry not in members:
+                            members.append(entry)
+                    # Top up with best-by-overall if the model returned unknown
+                    # names or too few; trim if too many.
+                    if len(members) < size:
+                        for entry in sorted(pool, key=lambda p: p[1].overall_score, reverse=True):
+                            if entry not in members:
+                                members.append(entry)
+                            if len(members) == size:
+                                break
+                    team = (members[:size], selection.rationale)
+                except Exception as exc:
+                    print(f"warning: team selection failed ({type(exc).__name__}: {exc}); "
+                          f"falling back to top {size} by overall score")
+                    members = sorted(pool, key=lambda p: p[1].overall_score, reverse=True)[:size]
+                    team = (members, f"Fallback: top {size} candidates by overall score "
+                                     "(model-based team selection failed).")
 
     output = Path(args.output)
-    write_workbook(results, skills, output, team=team)
+    write_workbook(results, skills, output, team=team, shapes=shapes, staff=staff)
 
     succeeded = sum(1 for r in results if r.evaluation)
     print(f"\nWrote {output} — {succeeded} evaluated, {len(results) - succeeded} failed.")
