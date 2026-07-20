@@ -1,7 +1,5 @@
 # Resume Reviewer
 
-[![Latest release](https://img.shields.io/github/v/release/ckovacs_boxboat/screener)](https://github.com/ckovacs_boxboat/screener/releases/latest)
-
 AI workflow that evaluates a directory of resumes against a skill list and a
 project description using the Claude API, and exports the results as an Excel
 spreadsheet.
