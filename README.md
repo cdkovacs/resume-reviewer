@@ -1,5 +1,7 @@
 # Resume Reviewer
 
+[![Latest release](https://img.shields.io/github/v/release/cdkovacs/resume-reviewer)](https://github.com/cdkovacs/resume-reviewer/releases/latest)
+
 AI workflow that evaluates a directory of resumes against a skill list and a
 project description using the Claude API, and exports the results as an Excel
 spreadsheet.
@@ -13,7 +15,7 @@ spreadsheet.
 curl -LsSf https://astral.sh/uv/install.sh | sh        # or: brew install uv
 
 # 2. Install the latest revision of resume-reviewer as a tool
-uv tool install --force git+ssh://git@github.com/ckovacs_boxboat/screener.git
+uv tool install --force git+https://github.com/cdkovacs/resume-reviewer.git
 
 # 3. Configure the backend (ICA is the default)
 export ICA_ANTHROPIC_API_KEY=<your-key>
@@ -32,7 +34,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 # or: winget install --id=astral-sh.uv -e
 
 # 2. Install the latest revision of resume-reviewer as a tool
-uv tool install --force git+ssh://git@github.com/ckovacs_boxboat/screener.git
+uv tool install --force git+https://github.com/cdkovacs/resume-reviewer.git
 
 # 3. Configure the backend (ICA is the default)
 $env:ICA_ANTHROPIC_API_KEY = "<your-key>"
@@ -54,13 +56,13 @@ without git/SSH access to the repo:
 
 ```sh
 # Download the wheel from the latest release (or pass a tag instead of omitting it)
-gh release download --repo ckovacs_boxboat/screener --pattern '*.whl' --dir dist
+gh release download --repo cdkovacs/resume-reviewer --pattern '*.whl' --dir dist
 
 # Install it as a tool (or: uv pip install ./dist/*.whl into an active venv)
 uv tool install ./dist/resume_reviewer-*.whl
 
 # Optional: verify the asset came from an immutable release
-gh release verify-asset --repo ckovacs_boxboat/screener <tag> ./dist/resume_reviewer-*.whl
+gh release verify-asset --repo cdkovacs/resume-reviewer <tag> ./dist/resume_reviewer-*.whl
 ```
 
 Alternatively download the `.whl` from the Releases page in a browser and run
