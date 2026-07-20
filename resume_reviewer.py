@@ -43,6 +43,16 @@ DEFAULT_PROJECT_FILE = "project.md"
 DEFAULT_STAFF_RATES_FILE = "staff-rates.xlsx"
 DEFAULT_RATES_CANDIDATES = ("rates.xlsx", "~/staffing/rates.xlsx")
 TEAM_SHAPES = ("low cost", "medium cost", "high cost", "cost not considered")
+TEAM_CHARACTERISTICS_INSTRUCTION = (
+    "If the project description specifies team characteristics — required roles "
+    "(e.g. a project manager), minimum numbers of certain specialists (e.g. a certain "
+    "number of scripting specialists), seniority or geographic mixes — treat them as "
+    "hard requirements: every team you build must satisfy them wherever the candidate "
+    "pool allows, choosing members whose evaluations evidence those roles or "
+    "specialties. In composition_notes, state each required characteristic and which "
+    "member(s) satisfy it, or explain why it cannot be met with this pool; write "
+    "'none specified' if the project description states no team characteristics."
+)
 DEFAULT_MODEL = "claude-opus-4-8"
 DEFAULT_SCREEN_MODEL = "claude-haiku-4-5"
 # The /ica root, NOT /ica/v1 — the SDK appends /v1/messages itself.
@@ -106,6 +116,12 @@ class TeamSelection(BaseModel):
         description="Why this mix forms the strongest overall team: skill coverage, "
         "complementary profiles, and any tradeoffs made"
     )
+    composition_notes: str = Field(
+        description="How each team characteristic required by the project description "
+        "(required roles, specialist counts, mixes) is satisfied by this team, or why "
+        "it cannot be with this candidate pool; 'none specified' if the project "
+        "description states no team characteristics"
+    )
 
 
 class TeamShapeSelection(BaseModel):
@@ -115,6 +131,12 @@ class TeamShapeSelection(BaseModel):
         "copied verbatim from the provided list"
     )
     rationale: str = Field(description="Why this mix fits the shape's cost/skill objective")
+    composition_notes: str = Field(
+        description="How each team characteristic required by the project description "
+        "(required roles, specialist counts, mixes) is satisfied by this team, or why "
+        "it cannot be with this candidate pool; 'none specified' if the project "
+        "description states no team characteristics"
+    )
 
 
 class TeamShapesSelection(BaseModel):
@@ -671,8 +693,9 @@ def select_team(
         f"Select the {size} candidates who together form the strongest overall team for the "
         "project. Optimize the mix, not just individual scores: every skill area should be "
         "covered by at least one strong member, weight the project's critical initiatives "
-        "most heavily, and prefer complementary profiles over redundant ones. Return exactly "
-        f"{size} names, copied verbatim from the list above."
+        "most heavily, and prefer complementary profiles over redundant ones. "
+        + TEAM_CHARACTERISTICS_INSTRUCTION
+        + f" Return exactly {size} names, copied verbatim from the list above."
     )
     return call_structured(
         client,
@@ -769,7 +792,9 @@ def select_team_shapes(
         "2. 'medium cost' — balance cost and skill fit.\n"
         "3. 'high cost' — favor premium, senior talent where it buys real skill.\n"
         "4. 'cost not considered' — the strongest possible skill fit, ignoring cost.\n"
-        "Candidates may appear in multiple teams. Return names copied verbatim."
+        + TEAM_CHARACTERISTICS_INSTRUCTION
+        + " These characteristics apply to ALL four shapes — cost posture never overrides "
+        "them. Candidates may appear in multiple teams. Return names copied verbatim."
     )
     return call_structured(
         client,
@@ -1283,7 +1308,12 @@ def main() -> int:
                     for shape_name in TEAM_SHAPES:
                         entry = returned.get(shape_name)
                         members = resolve_members(entry.members if entry else [])
-                        rationale = entry.rationale if entry else "(model omitted this shape; filled by overall score)"
+                        if entry:
+                            rationale = entry.rationale
+                            if entry.composition_notes:
+                                rationale += f"\nComposition: {entry.composition_notes}"
+                        else:
+                            rationale = "(model omitted this shape; filled by overall score)"
                         shapes.append(shape_metrics(shape_name, members, rationale, skills, staff))
                 except Exception as exc:
                     print(f"warning: team-shape selection failed ({type(exc).__name__}: {exc}); "
@@ -1327,7 +1357,10 @@ def main() -> int:
                                 members.append(entry)
                             if len(members) == size:
                                 break
-                    team = (members[:size], selection.rationale)
+                    rationale = selection.rationale
+                    if selection.composition_notes:
+                        rationale += f"\nComposition: {selection.composition_notes}"
+                    team = (members[:size], rationale)
                 except Exception as exc:
                     print(f"warning: team selection failed ({type(exc).__name__}: {exc}); "
                           f"falling back to top {size} by overall score")

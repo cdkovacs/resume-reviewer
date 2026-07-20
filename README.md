@@ -178,6 +178,14 @@ Only fully-evaluated candidates are considered (with `--screen`, screened-out
 candidates are excluded). If the selection call fails, the tab falls back to
 the top N by overall score and says so in the rationale.
 
+**Team characteristics from the project description are hard requirements.**
+If `project.md` states composition needs — a project manager, a minimum number
+of scripting specialists, a seniority or geographic mix — every selected team
+(the single Team tab and all four cost shapes alike; cost posture never
+overrides them) must satisfy them where the pool allows. Each team's rationale
+includes a Composition line stating which members satisfy each requirement, or
+why one couldn't be met with the available candidates.
+
 ## Staffing rates and cost-shaped teams
 
 After each run, every evaluated candidate is synced into **`staff-rates.xlsx`**
