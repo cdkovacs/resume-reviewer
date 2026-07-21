@@ -78,6 +78,12 @@ gaps. Results land in an `.xlsx` workbook:
 - **Summary** — one row per candidate, sorted by overall score, with one column
   per skill and color-coded recommendations
 - **Skill Details** — per-skill evidence for every candidate
+- **Candidate Feedback** — one row per fully-evaluated candidate (name, email
+  from the resume, feedback text): a respectful, professional, positive message
+  telling the candidate they are being considered for a seat on a project,
+  describing what we're looking for, highlighting where their background
+  matched, and asking about experience in areas the resume didn't show — with
+  no scores, rankings, or confidential client details
 - **Errors** — any resumes that failed to process (only present if something failed)
 
 PDFs are sent to the API natively (no local text extraction); DOCX/TXT/MD are

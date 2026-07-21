@@ -79,6 +79,20 @@ class ResumeEvaluation(BaseModel):
     skill_evaluations: List[SkillEvaluation] = Field(
         description="One entry per skill in the skills list, in the same order"
     )
+    email: str = Field(
+        description="Candidate's email address as it appears on the resume; "
+        "empty string if none is present"
+    )
+    candidate_feedback: str = Field(
+        description="A message addressed directly to the candidate by name, in a "
+        "respectful, professional, positive tone. It must: (1) tell them they are "
+        "being considered for a seat on a project; (2) briefly describe what we are "
+        "looking for in a candidate, in general terms without disclosing confidential "
+        "client details; (3) highlight the skill areas where their background matched "
+        "well; and (4) ask whether they have experience in the skill areas where the "
+        "resume showed little or no evidence, inviting them to share it. Never mention "
+        "numeric scores, rankings, or other candidates."
+    )
 
 
 @dataclass(frozen=True)
@@ -997,6 +1011,18 @@ def write_workbook(
     for col, w in zip("ABCD", [24, 24, 12, 90]):
         ws_d.column_dimensions[col].width = w
 
+    # --- Candidate Feedback sheet ------------------------------------------
+    with_feedback = [(r, ev) for r, ev in ok if ev.candidate_feedback]
+    if with_feedback:
+        ws_f = wb.create_sheet("Candidate Feedback")
+        ws_f.append(["Name", "Email", "Feedback"])
+        for _, ev in with_feedback:
+            ws_f.append([ev.candidate_name, ev.email, ev.candidate_feedback])
+            ws_f.cell(row=ws_f.max_row, column=3).alignment = wrap
+        style_header(ws_f)
+        for col, width in zip("ABC", [24, 32, 120]):
+            ws_f.column_dimensions[col].width = width
+
     # --- Errors sheet ------------------------------------------------------
     failed = [r for r in results if r.error is not None]
     if failed:
@@ -1214,6 +1240,8 @@ def main() -> int:
                     strengths=[],
                     gaps=[],
                     skill_evaluations=[],
+                    email="",
+                    candidate_feedback="",
                 )
                 return Result(file=path, evaluation=ev, stage="screened out")
             except Exception as exc:
