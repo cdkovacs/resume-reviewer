@@ -84,14 +84,18 @@ class ResumeEvaluation(BaseModel):
         "empty string if none is present"
     )
     candidate_feedback: str = Field(
-        description="A message addressed directly to the candidate by name, in a "
-        "respectful, professional, positive tone. It must: (1) tell them they are "
-        "being considered for a seat on a project; (2) briefly describe what we are "
-        "looking for in a candidate, in general terms without disclosing confidential "
-        "client details; (3) highlight the skill areas where their background matched "
-        "well; and (4) ask whether they have experience in the skill areas where the "
-        "resume showed little or no evidence, inviting them to share it. Never mention "
-        "numeric scores, rankings, or other candidates."
+        description="A message to the candidate in a respectful, professional, "
+        "positive tone, formatted like an email: start with 'Dear <name>,' followed "
+        "by a blank line (two newlines); then the body paragraphs; then a blank line "
+        "(two newlines) before a final closing line that begins 'We appreciate your "
+        "time'. The body must: (1) tell them they are being considered for a seat on "
+        "a project; (2) briefly describe what we are looking for in a candidate, in "
+        "general terms without disclosing confidential client details; (3) highlight "
+        "the skill areas where their background matched well; and (4) ask whether "
+        "they have experience in the skill areas where the resume showed little or "
+        "no evidence, inviting them to share it. Write in complete, flowing "
+        "sentences: no dashes, em dashes, hyphens-as-punctuation, or bullet lists. "
+        "Never mention numeric scores, rankings, or other candidates."
     )
 
 
