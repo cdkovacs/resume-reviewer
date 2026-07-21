@@ -1015,6 +1015,47 @@ def write_workbook(
     for col, w in zip("ABCD", [24, 24, 12, 90]):
         ws_d.column_dimensions[col].width = w
 
+    # --- Ranking sheet: force-ranked bar chart of weighted averages ---------
+    ranked = sorted(
+        (
+            (r, ev, weighted_avg(ev))
+            for r, ev in ok
+            if isinstance(weighted_avg(ev), (int, float))
+        ),
+        key=lambda t: (t[2], t[1].overall_score, t[1].candidate_name),
+        reverse=True,
+    )
+    if ranked:
+        from openpyxl.chart import BarChart, Reference
+        from openpyxl.chart.label import DataLabelList
+
+        ws_r = wb.create_sheet("Ranking")
+        ws_r.append(["Rank", "Candidate", "Weighted avg (0-4)"])
+        for rank, (_, ev, wa) in enumerate(ranked, start=1):
+            ws_r.append([rank, ev.candidate_name, wa])
+        style_header(ws_r)
+        ws_r.column_dimensions["B"].width = 28
+        ws_r.column_dimensions["C"].width = 18
+
+        chart = BarChart()
+        chart.type = "bar"  # horizontal bars — readable candidate names
+        chart.title = "Force ranking — weighted average (0-4)"
+        data = Reference(ws_r, min_col=3, min_row=1, max_row=len(ranked) + 1)
+        cats = Reference(ws_r, min_col=2, min_row=2, max_row=len(ranked) + 1)
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        chart.legend = None
+        # Rows are written best-first; flip the category axis so rank 1 is at
+        # the top of the chart, and keep the value axis at the bottom.
+        chart.x_axis.scaling.orientation = "maxMin"
+        chart.y_axis.crosses = "max"
+        chart.y_axis.scaling.min = 0
+        chart.y_axis.scaling.max = 4
+        chart.dataLabels = DataLabelList(showVal=True)
+        chart.width = 22
+        chart.height = max(8.0, 0.55 * len(ranked) + 2)
+        ws_r.add_chart(chart, "E2")
+
     # --- Candidate Feedback sheet ------------------------------------------
     with_feedback = [(r, ev) for r, ev in ok if ev.candidate_feedback]
     if with_feedback:

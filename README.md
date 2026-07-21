@@ -78,6 +78,8 @@ gaps. Results land in an `.xlsx` workbook:
 - **Summary** — one row per candidate, sorted by overall score, with one column
   per skill and color-coded recommendations
 - **Skill Details** — per-skill evidence for every candidate
+- **Ranking** — force-ranked list and horizontal bar chart of each candidate's
+  weighted average (0-4), sorted most qualified first
 - **Candidate Feedback** — one row per fully-evaluated candidate (name, email
   from the resume, feedback text): a respectful, professional, positive message
   telling the candidate they are being considered for a seat on a project,
