@@ -81,7 +81,9 @@ gaps. Results land in an `.xlsx` workbook:
 - **Ranking** — force-ranked list and horizontal bar chart of each candidate's
   weighted average (0-4), sorted most qualified first
 - **Candidate Feedback** — one row per fully-evaluated candidate (name, email
-  from the resume, feedback text): a respectful, professional, positive message
+  from the resume, and two feedback texts: a professional voice, plus a warmer
+  personal voice for close, well-known colleagues — pick the column that fits
+  how well you know the candidate): a respectful, positive message
   telling the candidate they are being considered for a seat on a project,
   describing what we're looking for, highlighting where their background
   matched, and asking about experience in areas the resume didn't show — with
