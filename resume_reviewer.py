@@ -97,6 +97,19 @@ class ResumeEvaluation(BaseModel):
         "sentences: no dashes, em dashes, hyphens-as-punctuation, or bullet lists. "
         "Never mention numeric scores, rankings, or other candidates."
     )
+    candidate_feedback_personal: str = Field(
+        description="A second version of the same feedback message, for a candidate "
+        "who is a close, well-known colleague of the sender. Same email format "
+        "('Dear <first name>,' then a blank line, body paragraphs, a blank line, and "
+        "a closing line beginning 'We appreciate your time') and the same required "
+        "content (being considered for a project seat; what we are looking for; where "
+        "their background matched; asking about experience in areas the resume did "
+        "not show), but in a warm, personal, collegial voice: first-name basis, "
+        "friendly and direct, as if writing to someone you have worked with for "
+        "years — while staying respectful and positive. Complete sentences only; no "
+        "dashes, em dashes, or bullet lists; no numeric scores, rankings, or other "
+        "candidates."
+    )
 
 
 @dataclass(frozen=True)
@@ -1060,12 +1073,14 @@ def write_workbook(
     with_feedback = [(r, ev) for r, ev in ok if ev.candidate_feedback]
     if with_feedback:
         ws_f = wb.create_sheet("Candidate Feedback")
-        ws_f.append(["Name", "Email", "Feedback"])
+        ws_f.append(["Name", "Email", "Feedback (professional)", "Feedback (personal)"])
         for _, ev in with_feedback:
-            ws_f.append([ev.candidate_name, ev.email, ev.candidate_feedback])
+            ws_f.append([ev.candidate_name, ev.email, ev.candidate_feedback,
+                         ev.candidate_feedback_personal])
             ws_f.cell(row=ws_f.max_row, column=3).alignment = wrap
+            ws_f.cell(row=ws_f.max_row, column=4).alignment = wrap
         style_header(ws_f)
-        for col, width in zip("ABC", [24, 32, 120]):
+        for col, width in zip("ABCD", [24, 32, 90, 90]):
             ws_f.column_dimensions[col].width = width
 
     # --- Errors sheet ------------------------------------------------------
@@ -1287,6 +1302,7 @@ def main() -> int:
                     skill_evaluations=[],
                     email="",
                     candidate_feedback="",
+                    candidate_feedback_personal="",
                 )
                 return Result(file=path, evaluation=ev, stage="screened out")
             except Exception as exc:
