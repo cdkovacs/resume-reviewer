@@ -65,13 +65,13 @@ ICA_DEFAULT_BASE_URL = "https://api.nextgen-beta.ica.ibm.com/ica"
 
 class SkillEvaluation(BaseModel):
     skill: str = Field(description="The skill being evaluated, exactly as given in the skills list")
-    score: int = Field(description="Score from 1 (no evidence) to 5 (expert, strong direct evidence)")
+    score: int = Field(description="Score from 0 (no evidence) to 4 (expert, strong direct evidence)")
     evidence: str = Field(description="Specific evidence from the resume supporting the score, or why evidence is lacking")
 
 
 class ResumeEvaluation(BaseModel):
     candidate_name: str = Field(description="Candidate's full name as it appears on the resume")
-    overall_score: int = Field(description="Overall fit for the project, 1 (poor fit) to 5 (excellent fit)")
+    overall_score: int = Field(description="Overall fit for the project, 0 (poor fit) to 4 (excellent fit)")
     recommendation: Literal["strong yes", "yes", "maybe", "no"]
     summary: str = Field(description="2-4 sentence assessment of the candidate's fit for the project")
     strengths: List[str] = Field(description="Top strengths relevant to the project")
@@ -166,7 +166,7 @@ class TeamShapesSelection(BaseModel):
 
 class ScreenResult(BaseModel):
     candidate_name: str = Field(description="Candidate's full name as it appears on the resume")
-    overall_score: int = Field(description="Overall fit for the project, 1 (poor fit) to 5 (excellent fit)")
+    overall_score: int = Field(description="Overall fit for the project, 0 (poor fit) to 4 (excellent fit)")
     recommendation: Literal["strong yes", "yes", "maybe", "no"]
     summary: str = Field(description="1-2 sentence assessment of the candidate's fit")
 
@@ -508,7 +508,7 @@ def build_system_prompt(prompt: str, project: str, skills: List[Skill]) -> str:
         "You are an experienced technical recruiter and hiring manager. "
         "Evaluate the resume you are given against the project description and skills below. "
         "Base every score strictly on evidence in the resume; do not give the benefit of the doubt "
-        "for skills that are not demonstrated. Score each skill from 1 (no evidence) to 5 "
+        "for skills that are not demonstrated. Score each skill from 0 (no evidence) to 4 "
         "(expert with strong direct evidence). Provide one skill_evaluations entry per listed "
         "skill, using the exact skill names given, in the same order. "
         "Each skill's weight indicates its relative importance to this project: individual "
@@ -861,7 +861,7 @@ def write_workbook(
         ws.freeze_panes = "A2"
 
     def skill_label(s: Skill) -> str:
-        return f"{s.name} (1-5)" if s.weight == 1.0 else f"{s.name} (1-5, w={s.weight:g})"
+        return f"{s.name} (0-4)" if s.weight == 1.0 else f"{s.name} (0-4, w={s.weight:g})"
 
     def weighted_avg(ev: ResumeEvaluation) -> object:
         scores_by_skill = {se.skill.strip().lower(): se.score for se in ev.skill_evaluations}
@@ -878,7 +878,7 @@ def write_workbook(
     ws = wb.active
     assert ws is not None
     ws.title = "Summary"
-    headers = ["Candidate", "File", "Overall (1-5)", "Weighted avg (1-5)", "Recommendation", "Stage"]
+    headers = ["Candidate", "File", "Overall (0-4)", "Weighted avg (0-4)", "Recommendation", "Stage"]
     headers += [skill_label(s) for s in skills]
     headers += ["Strengths", "Gaps", "Summary"]
     ws.append(headers)
@@ -908,7 +908,7 @@ def write_workbook(
     # --- Team Shapes sheet (second tab, when rates enabled the four shapes) --
     if shapes:
         ws_s = wb.create_sheet("Team Shapes", 1)
-        ws_s.append(["Shape", "Skill fit (1-5)", "Avg cost rate", "Currency", "Members"])
+        ws_s.append(["Shape", "Skill fit (0-4)", "Avg cost rate", "Currency", "Members"])
         for sh in shapes:
             ws_s.append([
                 sh.shape, sh.fit_score, sh.avg_rate, sh.currency,
@@ -917,7 +917,7 @@ def write_workbook(
             ws_s.cell(row=ws_s.max_row, column=5).alignment = wrap
         style_header(ws_s)
 
-        block_headers = ["Candidate", "Overall (1-5)", "Rate", "Currency"] + [
+        block_headers = ["Candidate", "Overall (0-4)", "Rate", "Currency"] + [
             skill_label(s) for s in skills
         ]
         for sh in shapes:
@@ -967,7 +967,7 @@ def write_workbook(
     if team is not None:
         members, rationale = team
         ws_t = wb.create_sheet("Team", 1)
-        t_headers = ["Candidate", "Overall (1-5)"] + [skill_label(s) for s in skills]
+        t_headers = ["Candidate", "Overall (0-4)"] + [skill_label(s) for s in skills]
         ws_t.append(t_headers)
         for _, ev in members:
             scores_by_skill = {se.skill.strip().lower(): se.score for se in ev.skill_evaluations}
@@ -1006,7 +1006,7 @@ def write_workbook(
 
     # --- Details sheet -----------------------------------------------------
     ws_d = wb.create_sheet("Skill Details")
-    ws_d.append(["Candidate", "Skill", "Score (1-5)", "Evidence"])
+    ws_d.append(["Candidate", "Skill", "Score (0-4)", "Evidence"])
     for r, ev in ok:
         for se in ev.skill_evaluations:
             ws_d.append([ev.candidate_name, se.skill, se.score, se.evidence])
@@ -1120,8 +1120,8 @@ def main() -> int:
     parser.add_argument(
         "--screen-cutoff",
         type=int,
-        default=3,
-        help="Minimum screening score (1-5) to advance to full evaluation (default: 3)",
+        default=2,
+        help="Minimum screening score (0-4) to advance to full evaluation (default: 2)",
     )
     args = parser.parse_args()
 
