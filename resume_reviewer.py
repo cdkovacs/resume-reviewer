@@ -205,15 +205,22 @@ class Result:
 # --------------------------------------------------------------------------
 
 def extract_docx_text(path: Path) -> str:
+    """Extract every paragraph in document order by walking the XML body.
+
+    document.paragraphs + document.tables misses content in tables nested
+    inside table cells (and text boxes) — common in CV templates, where the
+    entire work history can live in nested tables and silently vanish.
+    Iterating all w:p elements captures everything exactly once.
+    """
     import docx  # python-docx
+    from docx.oxml.ns import qn
 
     document = docx.Document(str(path))
-    parts = [p.text for p in document.paragraphs if p.text.strip()]
-    for table in document.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells if c.text.strip()]
-            if cells:
-                parts.append(" | ".join(cells))
+    parts = []
+    for paragraph in document.element.body.iter(qn("w:p")):
+        text = "".join(t.text or "" for t in paragraph.iter(qn("w:t"))).strip()
+        if text:
+            parts.append(text)
     return "\n".join(parts)
 
 
