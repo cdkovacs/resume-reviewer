@@ -55,6 +55,10 @@ TEAM_CHARACTERISTICS_INSTRUCTION = (
 )
 DEFAULT_MODEL = "claude-opus-4-8"
 DEFAULT_SCREEN_MODEL = "claude-haiku-4-5"
+# Scoring scale: change SCALE_MAX and everything follows (prompt, schemas,
+# headers, chart axis, screen cutoff default).
+SCALE_MAX = 100
+SCALE_LABEL = f"0-{SCALE_MAX}"
 # The /ica root, NOT /ica/v1 — the SDK appends /v1/messages itself.
 ICA_DEFAULT_BASE_URL = "https://api.nextgen-beta.ica.ibm.com/ica"
 
@@ -65,13 +69,13 @@ ICA_DEFAULT_BASE_URL = "https://api.nextgen-beta.ica.ibm.com/ica"
 
 class SkillEvaluation(BaseModel):
     skill: str = Field(description="The skill being evaluated, exactly as given in the skills list")
-    score: int = Field(description="Score from 0 (no evidence) to 3 (expert, strong direct evidence)")
+    score: int = Field(description=f"Score from 0 (no evidence) to {SCALE_MAX} (expert, strong direct evidence)")
     evidence: str = Field(description="Specific evidence from the resume supporting the score, or why evidence is lacking")
 
 
 class ResumeEvaluation(BaseModel):
     candidate_name: str = Field(description="Candidate's full name as it appears on the resume")
-    overall_score: int = Field(description="Overall fit for the project, 0 (poor fit) to 3 (excellent fit)")
+    overall_score: int = Field(description=f"Overall fit for the project, 0 (poor fit) to {SCALE_MAX} (excellent fit)")
     recommendation: Literal["strong yes", "yes", "maybe", "no"]
     summary: str = Field(description="2-4 sentence assessment of the candidate's fit for the project")
     strengths: List[str] = Field(description="Top strengths relevant to the project")
@@ -179,7 +183,7 @@ class TeamShapesSelection(BaseModel):
 
 class ScreenResult(BaseModel):
     candidate_name: str = Field(description="Candidate's full name as it appears on the resume")
-    overall_score: int = Field(description="Overall fit for the project, 0 (poor fit) to 3 (excellent fit)")
+    overall_score: int = Field(description=f"Overall fit for the project, 0 (poor fit) to {SCALE_MAX} (excellent fit)")
     recommendation: Literal["strong yes", "yes", "maybe", "no"]
     summary: str = Field(description="1-2 sentence assessment of the candidate's fit")
 
@@ -521,7 +525,7 @@ def build_system_prompt(prompt: str, project: str, skills: List[Skill]) -> str:
         "You are an experienced technical recruiter and hiring manager. "
         "Evaluate the resume you are given against the project description and skills below. "
         "Base every score strictly on evidence in the resume; do not give the benefit of the doubt "
-        "for skills that are not demonstrated. Score each skill from 0 (no evidence) to 3 "
+        f"for skills that are not demonstrated. Score each skill from 0 (no evidence) to {SCALE_MAX} "
         "(expert with strong direct evidence). Provide one skill_evaluations entry per listed "
         "skill, using the exact skill names given, in the same order. "
         "Each skill's weight indicates its relative importance to this project: individual "
@@ -874,7 +878,7 @@ def write_workbook(
         ws.freeze_panes = "A2"
 
     def skill_label(s: Skill) -> str:
-        return f"{s.name} (0-3)" if s.weight == 1.0 else f"{s.name} (0-3, w={s.weight:g})"
+        return f"{s.name} ({SCALE_LABEL})" if s.weight == 1.0 else f"{s.name} ({SCALE_LABEL}, w={s.weight:g})"
 
     def weighted_avg(ev: ResumeEvaluation) -> object:
         scores_by_skill = {se.skill.strip().lower(): se.score for se in ev.skill_evaluations}
@@ -891,7 +895,7 @@ def write_workbook(
     ws = wb.active
     assert ws is not None
     ws.title = "Summary"
-    headers = ["Candidate", "File", "Overall (0-3)", "Weighted avg (0-3)", "Recommendation", "Stage"]
+    headers = ["Candidate", "File", f"Overall ({SCALE_LABEL})", f"Weighted avg ({SCALE_LABEL})", "Recommendation", "Stage"]
     headers += [skill_label(s) for s in skills]
     headers += ["Strengths", "Gaps", "Summary"]
     ws.append(headers)
@@ -921,7 +925,7 @@ def write_workbook(
     # --- Team Shapes sheet (second tab, when rates enabled the four shapes) --
     if shapes:
         ws_s = wb.create_sheet("Team Shapes", 1)
-        ws_s.append(["Shape", "Skill fit (0-3)", "Avg cost rate", "Currency", "Members"])
+        ws_s.append(["Shape", f"Skill fit ({SCALE_LABEL})", "Avg cost rate", "Currency", "Members"])
         for sh in shapes:
             ws_s.append([
                 sh.shape, sh.fit_score, sh.avg_rate, sh.currency,
@@ -930,7 +934,7 @@ def write_workbook(
             ws_s.cell(row=ws_s.max_row, column=5).alignment = wrap
         style_header(ws_s)
 
-        block_headers = ["Candidate", "Overall (0-3)", "Rate", "Currency"] + [
+        block_headers = ["Candidate", f"Overall ({SCALE_LABEL})", "Rate", "Currency"] + [
             skill_label(s) for s in skills
         ]
         for sh in shapes:
@@ -980,7 +984,7 @@ def write_workbook(
     if team is not None:
         members, rationale = team
         ws_t = wb.create_sheet("Team", 1)
-        t_headers = ["Candidate", "Overall (0-3)"] + [skill_label(s) for s in skills]
+        t_headers = ["Candidate", f"Overall ({SCALE_LABEL})"] + [skill_label(s) for s in skills]
         ws_t.append(t_headers)
         for _, ev in members:
             scores_by_skill = {se.skill.strip().lower(): se.score for se in ev.skill_evaluations}
@@ -1019,7 +1023,7 @@ def write_workbook(
 
     # --- Details sheet -----------------------------------------------------
     ws_d = wb.create_sheet("Skill Details")
-    ws_d.append(["Candidate", "Skill", "Score (0-3)", "Evidence"])
+    ws_d.append(["Candidate", "Skill", f"Score ({SCALE_LABEL})", "Evidence"])
     for r, ev in ok:
         for se in ev.skill_evaluations:
             ws_d.append([ev.candidate_name, se.skill, se.score, se.evidence])
@@ -1043,7 +1047,7 @@ def write_workbook(
         from openpyxl.chart.label import DataLabelList
 
         ws_r = wb.create_sheet("Ranking")
-        ws_r.append(["Rank", "Candidate", "Weighted avg (0-3)"])
+        ws_r.append(["Rank", "Candidate", f"Weighted avg ({SCALE_LABEL})"])
         for rank, (_, ev, wa) in enumerate(ranked, start=1):
             ws_r.append([rank, ev.candidate_name, wa])
         style_header(ws_r)
@@ -1052,7 +1056,7 @@ def write_workbook(
 
         chart = BarChart()
         chart.type = "bar"  # horizontal bars — readable candidate names
-        chart.title = "Force ranking — weighted average (0-3)"
+        chart.title = f"Force ranking — weighted average ({SCALE_LABEL})"
         data = Reference(ws_r, min_col=3, min_row=1, max_row=len(ranked) + 1)
         cats = Reference(ws_r, min_col=2, min_row=2, max_row=len(ranked) + 1)
         chart.add_data(data, titles_from_data=True)
@@ -1063,7 +1067,7 @@ def write_workbook(
         chart.x_axis.scaling.orientation = "maxMin"
         chart.y_axis.crosses = "max"
         chart.y_axis.scaling.min = 0
-        chart.y_axis.scaling.max = 3
+        chart.y_axis.scaling.max = SCALE_MAX
         chart.dataLabels = DataLabelList(showVal=True)
         chart.width = 22
         chart.height = max(8.0, 0.55 * len(ranked) + 2)
@@ -1176,8 +1180,9 @@ def main() -> int:
     parser.add_argument(
         "--screen-cutoff",
         type=int,
-        default=2,
-        help="Minimum screening score (0-3) to advance to full evaluation (default: 2)",
+        default=SCALE_MAX // 2,
+        help=f"Minimum screening score ({SCALE_LABEL}) to advance to full evaluation "
+        f"(default: {SCALE_MAX // 2})",
     )
     args = parser.parse_args()
 

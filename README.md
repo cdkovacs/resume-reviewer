@@ -71,7 +71,7 @@ Alternatively download the `.whl` from the Releases page in a browser and run
 ## What it does
 
 For each resume (`.pdf`, `.docx`, `.txt`, `.md`) in the input directory, ICA/Claude
-produces a structured evaluation: candidate name, an overall fit score (0-3), a
+produces a structured evaluation: candidate name, an overall fit score (0-100), a
 hire recommendation, per-skill scores with supporting evidence, strengths, and
 gaps. Results land in an `.xlsx` workbook:
 
@@ -79,7 +79,7 @@ gaps. Results land in an `.xlsx` workbook:
   per skill and color-coded recommendations
 - **Skill Details** — per-skill evidence for every candidate
 - **Ranking** — force-ranked list and horizontal bar chart of each candidate's
-  weighted average (0-3), sorted most qualified first
+  weighted average (0-100), sorted most qualified first
 - **Candidate Feedback** — one row per fully-evaluated candidate (name, email
   from the resume, and two feedback texts: a professional voice, plus a warmer
   personal voice for close, well-known colleagues — pick the column that fits
@@ -150,7 +150,7 @@ uv run resume-reviewer ./resumes \
 | `--staff-rates` | Staff rates workbook to create/update (default: `staff-rates.xlsx`; pass `''` to disable) |
 | `--screen` | Enable the two-tier low-cost screening mode (see below) |
 | `--screen-model` | Screening model (default: `claude-haiku-4-5`) |
-| `--screen-cutoff` | Minimum screening score to advance to full evaluation (default: 2) |
+| `--screen-cutoff` | Minimum screening score to advance to full evaluation (default: 50) |
 
 ## Skill weights
 
@@ -158,9 +158,9 @@ uv run resume-reviewer ./resumes \
 `1.0`). Weights express relative importance to the project — they are passed
 to the model (informing the overall fit score, recommendation, and team
 selection), shown in the skill column headers when not 1.0, and used to
-compute the **Weighted avg (0-3)** column on the Summary sheet
+compute the **Weighted avg (0-100)** column on the Summary sheet
 (`Σ score×weight / Σ weight`). Individual skill scores stay unweighted,
-evidence-based 0-3. Quote skill names that contain commas:
+evidence-based 0-100. Quote skill names that contain commas:
 
 ```csv
 # skill,weight   (weight is optional and defaults to 1.0)
@@ -233,7 +233,7 @@ each with a decent skill fit but a different cost posture:
 | cost not considered | The strongest possible skill fit, ignoring cost |
 
 The tab opens with a comparison table — each shape's **skill fit score**
-(weighted coverage on the 0–3 scale: each skill counts as the team's best
+(weighted coverage on the 0–100 scale: each skill counts as the team's best
 member on that skill) and **average cost rate** — so the staffing team can see
 what a rate difference buys in skill. Below it, each team is broken out with
 member rates, per-skill scores, skill totals, and the selection rationale.
@@ -255,7 +255,7 @@ score and summary, but without per-skill detail.
 ```sh
 uv run resume-reviewer ./resumes \
   --skills-file skills.txt --project-file project.md \
-  --screen --screen-cutoff 2
+  --screen --screen-cutoff 50
 ```
 
 Use this for large batches; skip it when you have a handful of resumes and want
